@@ -13,8 +13,28 @@ from abc import ABC
 
 import torch
 import torch.nn as nn
+from torch_scatter import scatter_add, scatter_max
 
-from ivpgan.utils.math import segment_sum, unsorted_segment_sum, unsorted_segment_max
+from adgcca.utils.math import segment_sum
+
+
+def _proc_segment_ids(data, segment_ids):
+    assert all([i in data.shape for i in segment_ids.shape]), "segment_ids.shape should be a prefix of data.shape"
+    # segment_ids is a 1-D tensor repeat it to have the same shape as data
+    if len(segment_ids.shape) == 1:
+        s = torch.prod(torch.tensor(data.shape[1:])).long()
+        s = check_cuda(s)
+        segment_ids = segment_ids.repeat_interleave(s).view(segment_ids.shape[0], *data.shape[1:])
+    assert data.shape == segment_ids.shape, "data.shape and segment_ids.shape should be equal"
+    return segment_ids
+
+
+def check_cuda(tensor):
+    from adgcca import cuda
+    if cuda:
+        return tensor.cuda()
+    else:
+        return tensor
 
 
 class Layer(nn.Module, ABC):
@@ -26,12 +46,14 @@ class Layer(nn.Module, ABC):
         super(Layer, self).__init__()
 
         if activation and isinstance(activation, str):
+            from adgcca.nn.models import NonsatSigmoid
             self.activation = {'relu': nn.ReLU(),
                                'leaky_relu': nn.LeakyReLU(.2),
                                'sigmoid': nn.Sigmoid(),
                                'tanh': nn.Tanh(),
                                'softmax': nn.Softmax(),
-                               'elu': nn.ELU()}.get(activation.lower(), nn.ReLU())
+                               'elu': nn.ELU(),
+                               'nonsat_sigmoid': NonsatSigmoid()}.get(activation.lower(), nn.ReLU())
         else:
             self.activation = activation
 
@@ -221,6 +243,7 @@ class GraphConvLayer(Layer):
         """Store the summed atoms by degree"""
         deg_summed = self.max_degree * [None]
 
+        # TODO(bbrighttaer): parallelize
         for deg in range(1, self.max_degree + 1):
             idx = deg_adj_lists[deg - 1]
             gathered_atoms = atoms[idx.long()]
@@ -245,6 +268,7 @@ class GraphConvLayer(Layer):
         # Get collection of modified atom features
         new_rel_atoms_collection = (self.max_degree + 1 - self.min_degree) * [None]
 
+        # TODO(bbrighttaer): parallelize
         for deg in range(1, self.max_degree + 1):
             # Obtain relevant atoms for this degree
             rel_atoms = deg_summed[deg - 1]
@@ -296,6 +320,7 @@ class GraphPool(Layer):
 
         deg_maxed = (self.max_degree + 1 - self.min_degree) * [None]
 
+        # TODO(bbrighttaer): parallelize
         for deg in range(1, self.max_degree + 1):
             # Get self atoms
             begin = deg_slice[deg - self.min_degree, 0]
@@ -341,8 +366,9 @@ class GraphGather(Layer):
 
         assert batch_size > 1, "Graph gather requires batches larger than 1"
 
-        sparse_reps = unsorted_segment_sum(atom_features, membership, batch_size)
-        max_reps = unsorted_segment_max(atom_features, membership, batch_size)
+        segment_ids = _proc_segment_ids(atom_features, membership)
+        sparse_reps = scatter_add(atom_features, segment_ids, dim=0, fill_value=0)
+        max_reps, _ = scatter_max(atom_features, segment_ids, dim=0, fill_value=0)
         mol_features = torch.cat([sparse_reps, max_reps], dim=1)
 
         if self.activation:
@@ -410,3 +436,62 @@ class Conv2d(nn.Conv2d):
         self.activation_name = activation_name
         super(Conv2d, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias,
                                      padding_mode)
+
+
+class Reshape(nn.Module):
+    """
+    Reshapes a tensor using the given shape. The batch size is the first argument and it's set by default.
+    Thus, the passed shape does not include the batch size.
+    """
+
+    def __init__(self, shape):
+        super(Reshape, self).__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        """
+        Assumes that the shape of x has the structure: (batch_size, ...)
+        :param x:
+        :return:
+        """
+        return x.view(x.size()[0], *self.shape)
+
+
+class Flatten(nn.Module):
+    """
+    Flattens each sample (e.g. outputs of a Conv model) of the batch
+    """
+
+    def __init__(self):
+        super(Flatten, self).__init__()
+
+    def forward(self, x):
+        """
+        Assumes that the shape of x has the structure: (batch_size, ...)
+        :param x:
+        :return:
+        """
+        return x.view(x.size()[0], -1)
+
+
+class CIV(nn.Module):
+    """Combined Input Vector module.
+    It's basically a wrapper for torch.cat to enable its inclusion in nn.Sequential objects.
+    """
+
+    def __init__(self, dim):
+        super(CIV, self).__init__()
+        self.dim = dim
+
+    def forward(self, input):
+        combined = torch.cat(input, dim=self.dim)
+        return combined
+
+
+class Unsqueeze(nn.Module):
+    def __init__(self, dim):
+        super(Unsqueeze, self).__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return x.unsqueeze(dim=1)
