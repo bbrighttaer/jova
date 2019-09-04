@@ -30,6 +30,7 @@ class Param(abc.ABC):
         self.max = max
         self.choices = choices
         self.size = size
+        self.is_list = False if isinstance(size, int) and size == 1 else True
 
     @abc.abstractmethod
     def sample(self):
@@ -48,10 +49,10 @@ class DiscreteParam(Param):
     def sample(self):
         size = _get_size(self.size)
         val = rand.randint(self.min, self.max + 1, size).tolist()
-        if len(val) == 1 and not isinstance(self.size, DiscreteParam):
-            return val[0]
-        else:
+        if self.is_list:
             return val
+        else:
+            return val[0]
 
 
 class CategoricalParam(Param):
@@ -70,10 +71,10 @@ class CategoricalParam(Param):
             probs = rand.uniform(0., 1., len(self.choices))
             idx = np.argmax(probs)
             sel.append(self.choices[idx])
-        if len(sel) == 1 and not isinstance(self.size, DiscreteParam):
-            return sel[0]
-        else:
+        if self.is_list:
             return sel
+        else:
+            return sel[0]
 
 
 class LogRealParam(Param):
@@ -93,10 +94,10 @@ class LogRealParam(Param):
             v = pow(10, r)
             vals.append(v)
 
-        if len(vals) == 1 and not isinstance(self.size, DiscreteParam):
-            return vals[0]
-        else:
+        if self.is_list:
             return vals
+        else:
+            return vals[0]
 
 
 class ConstantParam(Param):
@@ -105,7 +106,7 @@ class ConstantParam(Param):
     __name__ = "constant_param"
 
     def __init__(self, c):
-        super(ConstantParam, self).__init__(None, None, None, None)
+        super(ConstantParam, self).__init__(None, None, None, 1)
         self._c = c
 
     def sample(self):
@@ -121,7 +122,7 @@ class RealParam(Param):
     def sample(self):
         size = _get_size(self.size)
         vals = rand.uniform(self.min, self.max, size)
-        if len(vals) == 1 and not isinstance(self.size, DiscreteParam):
+        if not self.is_list:
             return vals[0]
         return vals
 
@@ -130,7 +131,7 @@ class DictParam(Param):
     __name__ = "dict_param"
 
     def __init__(self, dict_params):
-        super(DictParam, self).__init__(None, None, None, None)
+        super(DictParam, self).__init__(None, None, None, 1)
         self.p_dict = dict_params
 
     def keys(self):

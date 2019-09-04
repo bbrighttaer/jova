@@ -14,11 +14,11 @@ from skopt import gp_minimize
 from skopt.space import Integer, Real, Categorical
 from skopt.utils import use_named_args
 
-from ivpgan.hyper.base import ParamSearchAlg, ParamInstance
-from ivpgan.hyper.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam, \
+from adgcca.hyper.base import ParamSearchAlg, ParamInstance
+from adgcca.hyper.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam, \
     RealParam
-from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import save_model
+from adgcca.utils.sim_data import DataNode
+from adgcca.utils.train_helpers import save_model
 
 size_suffix = "_size"
 
@@ -129,7 +129,8 @@ def _convert_to_hparams(bopt_params, params_config, hparams, prefix=None):
         for j in range(size):
             prefix = prefix if prefix else ""
             val.append(bopt_params["{}{}___{}".format(prefix, param, j)])
-        val = val[0] if len(val) == 1 else val
+        if not conf.is_list:
+            val = val[0]
         hparams[param] = val
 
     return hparams
