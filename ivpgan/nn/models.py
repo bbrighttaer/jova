@@ -345,3 +345,36 @@ class PairSequential(nn.Module):
         # form a single representation
         output = self.civ((comp_out, prot_out))
         return output
+
+
+class NonsatActivation(nn.Module):
+    def __init__(self, ep=1e-4, max_iter=100):
+        super(NonsatActivation, self).__init__()
+        self.ep = ep
+        self.max_iter = max_iter
+
+    def forward(self, x):
+        return nonsat_activation(x, self.ep, self.max_iter)
+
+
+def nonsat_activation(x, ep=1e-4, max_iter=100):
+    """
+    Implementation of the Non-saturating nonlinearity described in http://proceedings.mlr.press/v28/andrew13.html
+
+    :param x: float, tensor
+        Function input
+    :param ep:float, optional
+        Stop condition reference point.
+    :param max_iter: int, optional,
+        Helps to avoid infinite iterations.
+    :return:
+    """
+    y = x.detach().clone()
+    i = 0
+    while True:
+        y_ = (2. * y ** 3. / 3. + x) / (y ** 2. + 1.)
+        if torch.mean(torch.abs(y_ - y)) <= ep or i > max_iter:
+            return y_
+        else:
+            i += 1
+            y = y_.detach()

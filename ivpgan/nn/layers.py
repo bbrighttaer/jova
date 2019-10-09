@@ -46,14 +46,14 @@ class Layer(nn.Module, ABC):
         super(Layer, self).__init__()
 
         if activation and isinstance(activation, str):
-            from adgcca.nn.models import NonsatSigmoid
+            from ivpgan.nn.models import NonsatActivation
             self.activation = {'relu': nn.ReLU(),
                                'leaky_relu': nn.LeakyReLU(.2),
                                'sigmoid': nn.Sigmoid(),
                                'tanh': nn.Tanh(),
                                'softmax': nn.Softmax(),
                                'elu': nn.ELU(),
-                               'nonsat_sigmoid': NonsatSigmoid()}.get(activation.lower(), nn.ReLU())
+                               'nonsat': NonsatActivation()}.get(activation.lower(), nn.ReLU())
         else:
             self.activation = activation
 

@@ -26,13 +26,13 @@ from tqdm import tqdm
 import ivpgan.metrics as mt
 from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
-from ivpgan.hyper.bopt import BayesianOptSearchCV
-from ivpgan.hyper.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
-from ivpgan.hyper.rand import RandomSearchCV
+from soek.bopt import BayesianOptSearchCV
+from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
+from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather
 from ivpgan.nn.models import create_fcn_layers, CIV, WeaveModel, GraphConvSequential, PairSequential
-from ivpgan.utils import Trainer
+from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.train_helpers import save_model, count_parameters, load_model
@@ -544,17 +544,19 @@ def main(flags):
                                            data_provider=trainer.data_provider,
                                            train_fn=trainer.train,
                                            eval_fn=trainer.evaluate,
+                                           save_model_fn=io.save_model,
                                            init_args=extra_init_args,
                                            data_args=extra_data_args,
                                            train_args=extra_train_args,
                                            data_node=data_node,
                                            split_label=split_label,
-                                           view_label=view,
-                                           dataset_label=dataset_lbl)
+                                           sim_label=view,
+                                           dataset_label=dataset_lbl,
+                                           results_file="{}_{}_dti_{}.csv".format(flags["hparam_search_alg"], view,
+                                                                                  date_label))
 
                 stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
                 print(stats)
-                stats.to_csv("{}_{}_dti_{}.csv".format(flags["hparam_search_alg"], view, date_label))
                 print("Best params = {}".format(stats.best(m="max")))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
@@ -791,7 +793,8 @@ if __name__ == '__main__':
     #                     default=[123, 124, 125],
     #                     help='Random seeds to be used.')
     parser.add_argument('--no_reload',
-                        action="store_true",
+                        action="store_false",
+                        dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
     parser.add_argument('--data_dir',
@@ -833,7 +836,7 @@ if __name__ == '__main__':
     FLAGS['model_name'] = args.model_name
     FLAGS['prot_desc_path'] = args.prot_desc_path
     # FLAGS['seeds'] = args.seed
-    FLAGS['reload'] = not args.no_reload
+    FLAGS['reload'] = args.reload
     FLAGS['data_dir'] = args.data_dir
     FLAGS['split_warm'] = args.split_warm
     FLAGS['hparam_search'] = args.hparam_search

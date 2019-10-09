@@ -14,6 +14,7 @@ __author__ = 'Brighter Agyemang'
 import os
 import logging
 import sys
+import torch
 
 
 def get_logger(name=None, level='INFO', stream='stderr', filename=None, log_dir='./logs/'):
@@ -46,3 +47,27 @@ def get_logger(name=None, level='INFO', stream='stderr', filename=None, log_dir=
         format="%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s",
         handlers=handlers)
     return logging.getLogger(name)
+
+def save_model(model, path, name):
+    """
+    Saves the model parameters.
+
+    :param model:
+    :param path:
+    :param name:
+    :return:
+    """
+    os.makedirs(path, exist_ok=True)
+    file = os.path.join(path, name + ".mod")
+    torch.save(model.state_dict(), file)
+
+
+def load_model(path, name):
+    """
+    Loads the parameters of a model.
+
+    :param path:
+    :param name:
+    :return: The saved state_dict.
+    """
+    return torch.load(os.path.join(path, name), map_location=torch.device("cpu"))

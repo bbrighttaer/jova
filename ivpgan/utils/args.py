@@ -15,6 +15,7 @@ from torch.nn import ReLU, Sigmoid, Tanh, ELU, Softmax, LeakyReLU
 
 
 # Helper classes for packaging arguments to torch.nn modules.
+from ivpgan.nn.models import NonsatActivation
 
 
 class Args(ABC):
@@ -33,7 +34,8 @@ class Args(ABC):
                           'sigmoid': Sigmoid(),
                           'tanh': Tanh(),
                           'softmax': Softmax(dim=1),
-                          'elu': ELU()}.get(activation.lower(), ReLU())
+                          'elu': ELU(),
+                          'nonsat': NonsatActivation()}.get(activation.lower(), ReLU())
         self._activation = activation
         self._batch_norm = batch_norm
         self._dropout = dropout
