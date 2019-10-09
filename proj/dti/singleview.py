@@ -293,8 +293,6 @@ class SingleViewDTI(Trainer):
             for phase in ["train", "val"]:
                 if phase == "train":
                     print("Training....")
-                    # Adjust the learning rate.
-                    scheduler.step()
                     # Training mode
                     model.train()
                 else:
@@ -367,6 +365,8 @@ class SingleViewDTI(Trainer):
                 # End of mini=batch iterations.
 
                 if phase == "train":
+                    # Adjust the learning rate.
+                    scheduler.step()
                     print("\nPhase: {}, avg task loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
                 else:
                     mean_score = np.mean(epoch_scores)

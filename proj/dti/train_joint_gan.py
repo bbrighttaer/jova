@@ -268,7 +268,6 @@ class IntegratedViewDTI(Trainer):
                     print("Training....")
                     # Adjust the learning rate.
                     # scheduler_gen.step()
-                    scheduler_disc.step()
                     # Training mode
                     generator.train()
                     discriminator.train()
@@ -387,6 +386,7 @@ class IntegratedViewDTI(Trainer):
 
                 if phase == "train":
                     print("\nPhase: {}, avg task pred_loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
+                    scheduler_disc.step()
                 else:
                     mean_score = np.mean(epoch_scores)
                     if best_score < mean_score:
