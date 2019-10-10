@@ -45,7 +45,7 @@ seeds = [123, 124, 125]
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
-# torch.cuda.set_device(1)
+torch.cuda.set_device(2)
 
 
 def create_ecfp_net(hparams):

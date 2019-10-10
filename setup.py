@@ -10,7 +10,7 @@ from setuptools import setup
 setup(
     name='ivpgan',
     version='0.0.1',
-    packages=['ivpgan', 'ivpgan.nn', 'ivpgan.nn.tests', 'ivpgan.hyper', 'ivpgan.utils', 'ivpgan.utils.tests',
+    packages=['ivpgan', 'ivpgan.nn', 'ivpgan.nn.tests', 'ivpgan.utils', 'ivpgan.utils.tests',
               'ivpgan.metrics'],
     url='',
     license='MIT',
