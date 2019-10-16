@@ -151,3 +151,28 @@ def unsorted_segment_max(data, segment_ids, num_segments):
 #     rows = list(grp.values())
 #     tensor = torch.tensor(rows, dtype=data.dtype)
 #     return tensor
+
+class ExpAverage(object):
+    def __init__(self, beta, bias_cor=False):
+        self.beta = beta
+        self.value = 0.
+        self.bias_cor = bias_cor
+        self.t = 0
+
+    def reset(self):
+        self.t = 0
+        self.value = 0
+
+    def update(self, v):
+        self.t += 1
+        self.value = self.beta * self.value + (1. - self.beta) * v
+        if self.bias_cor:
+            self.value = self.value / (1. - pow(self.beta, self.t))
+
+
+class Count(object):
+    def __init__(self, i=-1):
+        self.i = i
+
+    def inc(self):
+        self.i += 1

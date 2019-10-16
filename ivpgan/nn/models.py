@@ -15,10 +15,12 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.init as init
+import torch.nn.functional as F
 
 from ivpgan.nn.layers import Linear, Conv1d, Conv2d
 from ivpgan.nn.layers import WeaveGather, WeaveLayer, GraphConvLayer, GraphGather, GraphPool, WeaveBatchNorm, \
     WeaveDropout
+from ivpgan.utils.train_helpers import get_activation_func
 
 relu_batch_norm = False
 
@@ -378,3 +380,150 @@ def nonsat_activation(x, ep=1e-4, max_iter=100):
         else:
             i += 1
             y = y_.detach()
+
+class DINA(nn.Module):
+
+    def __init__(self, out_dim, activation=torch.relu, heads=1, bias=True):
+        super(DINA, self).__init__()
+        self.out_dim = out_dim
+        self.heads = heads
+        self.add_bias = bias
+        self.batch_norm = nn.BatchNorm1d(out_dim)
+        self.batch_norm_2d = nn.BatchNorm2d(1)
+        self.register_parameter('U', None)
+        self.activation = activation
+        self._mask_mul = None
+        self._mask_add = None
+
+    @classmethod
+    def _pad_tensors(cls, c, contexts):
+        padded = []
+        for X in contexts:
+            mask = F.pad(torch.ones_like(X), (0, c - X.shape[-1])).bool()
+            X_padded = torch.zeros(mask.shape).to(X.device)
+            X_padded = X_padded.masked_scatter(mask, X)
+            padded.append(X_padded)
+        return padded
+
+    def forward(self, contexts):
+        """
+        Applies a Direction-Invariant N-way Attention to the given contexts.
+
+        :param contexts: tuple
+            The N contexts for computing the attention vectors.
+            Each element's shape must be (batch_size, l, d)
+        :return: tuple
+            attention vectors.
+        """
+        L = [0] + [c.shape[1] for c in contexts]
+        c = max([m.shape[-1] for m in contexts])
+        q = sum(L)
+        device = contexts[0].device
+
+        # pad where necessary
+        contexts = self._pad_tensors(c, contexts)
+
+        # initialize trainable parameter
+        if self.U is None:
+            self.U = nn.Parameter(torch.empty((self.heads, c, c)).to(device))
+            init.xavier_normal_(self.U)
+
+        # padding
+        M = torch.cat(contexts, dim=1).to(device)
+        M = torch.stack([M] * self.heads, dim=0)
+        U = torch.stack([self.U] * M.shape[1], dim=0).permute(1, 0, 2, 3)
+        M = M.reshape(-1, *M.shape[2:])
+        U = U.reshape(-1, *U.shape[2:])
+        K = M.bmm(U).bmm(M.permute(0, 2, 1))
+        # normalize each sample
+        # K = self.batch_norm_2d(K.unsqueeze(dim=1)).squeeze()
+        K = self.activation(K)
+        K = K.reshape(self.heads, K.shape[0] // self.heads, *K.shape[1:])
+
+        # masking
+        if self._mask_mul is None or q != self._mask_mul.shape[1]:
+            self._mask_mul = self._diag_sub_mat_mask(dim=q, sizes=L[1:], dvc=M.device, diag_fill_val=0)
+            self._mask_add = self._diag_sub_mat_mask(dim=q, sizes=L[1:], dvc=M.device,
+                                                     diag_fill_val=torch.min(K).item(),
+                                                     off_diag_fill_func=torch.zeros)
+        K_hat = K * self._mask_mul
+        K_hat = K_hat + self._mask_add
+
+        # max pooling
+        cols, _ = torch.max(K_hat, dim=2)
+        rows, _ = torch.max(K_hat, dim=3)
+        alpha = rows + cols
+
+        # attention
+        reps = []
+        for i, context in enumerate(contexts):
+            a = alpha[:, :, L[i]:L[i] + L[i + 1]]
+            wt = torch.softmax(a, dim=2)
+            wt = wt.unsqueeze(dim=2)
+            wt = wt.reshape(-1, *wt.shape[2:])
+            C = torch.stack([context] * self.heads, dim=0)
+            C = C.reshape(-1, *C.shape[2:])
+            r = wt.bmm(C).squeeze()
+            reps.append(r.reshape(r.shape[0] // self.heads, self.heads, -1))
+        return reps
+
+    @classmethod
+    def _diag_sub_mat_mask(cls, dim, sizes, dvc, off_diag_fill_func=torch.ones, diag_fill_val=-999):
+        D = off_diag_fill_func(dim, dim).to(dvc)
+        prev = 0
+        for s in sizes:
+            D[prev:prev + s, prev:prev + s] = diag_fill_val
+            prev += s
+        return D
+
+
+class NwayForward(nn.Module):
+
+    def __init__(self, models):
+        super(NwayForward, self).__init__()
+        self.models = nn.ModuleList(models)
+
+    def forward(self, inputs):
+        outs = []
+        for i, model in enumerate(self.models):
+            outs.append(model(inputs[i]))
+        return outs
+
+
+class Projector(nn.Module):
+
+    def __init__(self, in_features, out_features, bias=True, pool='avg', batch_norm=True, activation='relu'):
+        super(Projector, self).__init__()
+        self.linear = nn.Linear(in_features, out_features, bias)
+        self.batch_norm = batch_norm
+        if self.batch_norm:
+            self.bn = nn.BatchNorm1d(out_features)
+        self.activation = get_activation_func(activation)
+        self.pool = pool
+
+    def forward(self, inputs):
+        """
+        Performs pooling on each context to construct the representation and projects all representations of the
+        different modalities to a unified space.
+
+        :param inputs: list
+            A list of unimodal representations: [(batch_size, segments, latent_dimension),...]
+        :return: tensor
+            The representations resulting from the projection. shape: [batch_size, len(inputs)*latent_dimension]
+        """
+        # pooling
+        pooled = []
+        for C in inputs:
+            if self.pool == 'max':
+                p, _ = torch.max(C, dim=1)
+            else:
+                p = torch.mean(C, dim=1)
+            pooled.append(p)
+
+        # projection
+        X = torch.cat(pooled, dim=1)
+        X = self.linear(X)
+        if self.batch_norm:
+            X = self.bn(X)
+        X = self.activation(X)
+        return X

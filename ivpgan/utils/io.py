@@ -70,4 +70,4 @@ def load_model(path, name):
     :param name:
     :return: The saved state_dict.
     """
-    return torch.load(os.path.join(path, name), map_location=torch.device("cpu"))
+    return torch.load(os.path.join(path, name), map_location=torch.device("cuda:0"))

@@ -24,6 +24,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 
 from ivpgan import cuda
+from ivpgan.utils.math import ExpAverage
 
 
 def split_mnist(dataset, targets, num_views=2):
@@ -210,38 +211,64 @@ def run_training(training_fn, nprocs, *args):
              join=True)
 
 
-# def mp_train_dti(rank, nprocs, model, *args, **kwargs):
-#     setup(rank, nprocs)
-#     model = DDP(model)
-#     res = train_dti(model, *args, **kwargs)
-#     cleanup()
-#     return res
-
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def save_model(model, path, name):
-    """
-    Saves the model parameters.
+class GradStats(object):
+    def __init__(self, net, tb_writer=None, beta=.9, bias_cor=False):
+        super(GradStats, self).__init__()
+        self.net = net
+        self.writer = tb_writer
+        self._l2 = ExpAverage(beta, bias_cor)
+        self._max = ExpAverage(beta, bias_cor)
+        self._var = ExpAverage(beta, bias_cor)
+        self._window = 1 // (1. - beta)
 
-    :param model:
-    :param path:
-    :param name:
-    :return:
-    """
-    if not os.path.exists(path):
-        os.mkdir(path=path)
-    file = os.path.join(path, name + ".mod")
-    torch.save(model.state_dict(), file)
+    @property
+    def l2(self):
+        return self._l2.value
+
+    @property
+    def max(self):
+        return self._max.value
+
+    @property
+    def var(self):
+        return self._var.value
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, *args):
+        self._l2.reset()
+        self._max.reset()
+        self._var.reset()
+        self.t = 0
+
+    def stats(self, step_idx=None):
+        grads = np.concatenate([p.grad.data.cpu().numpy().flatten() for p in self.net.parameters()
+                                if p.grad is not None])
+        l2 = np.sqrt(np.mean(np.square(grads)))
+        self._l2.update(l2)
+        mx = np.max(np.abs(grads))
+        self._max.update(mx)
+        vr = np.var(grads)
+        self._var.update(vr)
+        if self.writer:
+            assert step_idx is not None, "step_idx cannot be none"
+            self.writer.add_scalar("grad_l2", l2, step_idx)
+            self.writer.add_scalar("grad_max", mx, step_idx)
+            self.writer.add_scalar("grad_var", vr, step_idx)
+        return "Grads stats (w={}): L2={}, max={}, var={}".format(int(self._window), self.l2, self.max, self.var)
 
 
-def load_model(path, name):
-    """
-    Loads the parameters of a model.
-
-    :param path:
-    :param name:
-    :return: The saved state_dict.
-    """
-    return torch.load(os.path.join(path, name), map_location="cuda:0")
+def get_activation_func(activation):
+    from ivpgan.nn.models import NonsatActivation
+    return {'relu': torch.nn.ReLU(),
+            'leaky_relu': torch.nn.LeakyReLU(.2),
+            'sigmoid': torch.nn.Sigmoid(),
+            'tanh': torch.nn.Tanh(),
+            'softmax': torch.nn.Softmax(),
+            'elu': torch.nn.ELU(),
+            'nonsat': NonsatActivation()}.get(activation.lower(), torch.nn.ReLU())

@@ -34,8 +34,9 @@ from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather
 from ivpgan.nn.models import create_fcn_layers, CIV, WeaveModel, GraphConvSequential, PairSequential
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
+from ivpgan.utils.io import load_model, save_model
 from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import save_model, count_parameters, load_model
+from ivpgan.utils.train_helpers import count_parameters
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -45,7 +46,7 @@ seeds = [123, 124, 125]
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
-torch.cuda.set_device(2)
+# torch.cuda.set_device(2)
 
 
 def create_ecfp_net(hparams):

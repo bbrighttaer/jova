@@ -47,7 +47,7 @@ check_data = False
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 
 
 def create_integrated_net(hparams):
