@@ -41,6 +41,7 @@ class DataNode(object):
         self.data = data
 
     def to_json(self, path="./"):
+        os.makedirs(path, exist_ok=True)
         with open(os.path.join(path, self.label + ".json"), "w") as f:
             json.dump({self.label: _to_dict(self.data)}, f)
 

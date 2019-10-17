@@ -17,6 +17,8 @@ from torch_scatter import scatter_add, scatter_max
 
 from adgcca.utils.math import segment_sum
 
+from ivpgan.utils.train_helpers import get_activation_func
+
 
 def _proc_segment_ids(data, segment_ids):
     assert all([i in data.shape for i in segment_ids.shape]), "segment_ids.shape should be a prefix of data.shape"
@@ -37,6 +39,23 @@ def check_cuda(tensor):
         return tensor
 
 
+def _group_atoms(atom_features, n_atoms_lst):
+    offset = 0
+    mols = []
+    m = torch.max(n_atoms_lst)
+    for n_atoms in n_atoms_lst:
+        segment = torch.tensor(list(range(offset, offset + n_atoms)), dtype=torch.long)
+        mol = atom_features[segment, :]
+        # pad molecule if necessary
+        l = m - n_atoms
+        p = torch.zeros(l, mol.shape[1]).to(mol.device)
+        mol = torch.cat([mol, p], dim=0)
+        mols.append(mol)
+        offset += n_atoms
+    outputs = torch.stack(mols, dim=0)
+    return outputs
+
+
 class Layer(nn.Module, ABC):
     """
     Base class for creating layers
@@ -46,14 +65,7 @@ class Layer(nn.Module, ABC):
         super(Layer, self).__init__()
 
         if activation and isinstance(activation, str):
-            from ivpgan.nn.models import NonsatActivation
-            self.activation = {'relu': nn.ReLU(),
-                               'leaky_relu': nn.LeakyReLU(.2),
-                               'sigmoid': nn.Sigmoid(),
-                               'tanh': nn.Tanh(),
-                               'softmax': nn.Softmax(),
-                               'elu': nn.ELU(),
-                               'nonsat': NonsatActivation()}.get(activation.lower(), nn.ReLU())
+            self.activation = get_activation_func(activation)
         else:
             self.activation = activation
 
@@ -115,13 +127,13 @@ class WeaveLayer(Layer):
         :param input_data: Must be an iterable [atom features, pair features, pair split, atom atom-pair]
         :return: (Atom features, Pair features)
         """
-        atom_features, pair_features, pair_split, atom_split, atom_to_pair = input_data
+        atom_features, pair_features, pair_split, atom_to_pair, _, _ = input_data
 
         AA = self.linear_AA(atom_features)
         AA = self.activation(AA)
         PA = self.linear_PA(pair_features)
         PA = self.activation(PA)
-        PA = segment_sum(data=PA, segment_ids=pair_split)
+        PA = scatter_add(PA, pair_split.long(), dim=0, fill_value=0)
         A = self.linear_A(torch.cat([AA, PA], dim=1))
         A = self.activation(A)
 
@@ -173,16 +185,16 @@ class WeaveGather(Layer):
         self.linear = Linear(self.conv_out_depth * len(self.gaussian_memberships), self.n_depth, activation)
 
     def forward(self, input_data):
-        outputs, atom_split = input_data
+        outputs, pair_features, atom_split, _ = input_data
 
         if self.gaussian_expand:
             outputs = self.gaussian_histogram(outputs)
-        output_molecules = segment_sum(outputs, atom_split)
+        output_molecules = scatter_add(outputs, atom_split.long(), dim=0, fill_value=0)
 
         if self.gaussian_expand:
             output_molecules = self.linear(output_molecules)
             output_molecules = self.activation(output_molecules) if self.activation else output_molecules
-        return output_molecules
+        return output_molecules, pair_features
 
     def gaussian_histogram(self, x):
         dist = [torch.distributions.normal.Normal(torch.tensor(m), torch.tensor(s))
@@ -196,29 +208,46 @@ class WeaveGather(Layer):
         return outputs
 
 
+class WeaveGather2D(WeaveGather):
+
+    def forward(self, input_data):
+        outputs, pair_features, atom_split, n_atoms_lst = input_data
+        if self.gaussian_expand:
+            outputs = self.gaussian_histogram(outputs)
+        if self.gaussian_expand:
+            outputs = self.linear(outputs)
+            outputs = self.activation(outputs) if self.activation else outputs
+        outputs = _group_atoms(outputs, n_atoms_lst)
+        return outputs, pair_features
+
+
 class WeaveDropout(Layer):
 
-    def __init__(self, prob):
+    def __init__(self, prob, update_pair):
         """
         Creates a dropout layer for weave convolution.
         """
         super(WeaveDropout, self).__init__()
+        self.update_pair = update_pair
         self.atom_dropout = nn.Dropout(prob)
-        self.pair_dropout = nn.Dropout(prob)
+        if update_pair:
+            self.pair_dropout = nn.Dropout(prob)
 
     def forward(self, atom_input, pair_input):
-        return self.atom_dropout(atom_input), self.pair_dropout(pair_input)
+        return self.atom_dropout(atom_input), self.pair_dropout(pair_input) if self.update_pair else pair_input
 
 
 class WeaveBatchNorm(Layer):
 
-    def __init__(self, atom_dim, pair_dim, activation=None):
+    def __init__(self, atom_dim, update_pair, pair_dim, activation=None):
         super(WeaveBatchNorm, self).__init__(activation)
+        self.update_pair = update_pair
         self.a_batchnorm = nn.BatchNorm1d(atom_dim)
-        self.p_batchnorm = nn.BatchNorm1d(pair_dim)
+        if update_pair:
+            self.p_batchnorm = nn.BatchNorm1d(pair_dim)
 
     def forward(self, atom_input, pair_input):
-        return self.a_batchnorm(atom_input), self.p_batchnorm(pair_input)
+        return self.a_batchnorm(atom_input), self.p_batchnorm(pair_input) if self.update_pair else pair_input
 
 
 class GraphConvLayer(Layer):
@@ -258,7 +287,7 @@ class GraphConvLayer(Layer):
 
         # Graph topology info
         deg_slice = input_data[1]
-        deg_adj_lists = input_data[3:]
+        deg_adj_lists = input_data[4:]
 
         layers = iter(self.linear_layers)
 
@@ -316,7 +345,7 @@ class GraphPool(Layer):
     def forward(self, input_data):
         atom_features = input_data[0]
         deg_slice = input_data[1]
-        deg_adj_lists = input_data[3:]
+        deg_adj_lists = input_data[4:]
 
         deg_maxed = (self.max_degree + 1 - self.min_degree) * [None]
 
@@ -373,6 +402,16 @@ class GraphGather(Layer):
 
         if self.activation:
             mol_features = self.activation(mol_features) if self.activation else mol_features
+        return mol_features
+
+
+class GraphGather2D(GraphGather):
+
+    def forward(self, input_data, batch_size):
+        atom_features, membership, n_atoms_lst = input_data[0], input_data[2], input_data[3]
+        outputs = _group_atoms(atom_features, n_atoms_lst)
+        if self.activation:
+            mol_features = self.activation(outputs) if self.activation else outputs
         return mol_features
 
 
@@ -474,13 +513,13 @@ class Flatten(nn.Module):
         return x.view(x.size()[0], -1)
 
 
-class CIV(nn.Module):
+class ConcatLayer(nn.Module):
     """Combined Input Vector module.
     It's basically a wrapper for torch.cat to enable its inclusion in nn.Sequential objects.
     """
 
     def __init__(self, dim):
-        super(CIV, self).__init__()
+        super(ConcatLayer, self).__init__()
         self.dim = dim
 
     def forward(self, input):

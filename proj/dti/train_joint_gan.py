@@ -36,7 +36,7 @@ from ivpgan.nn.models import GraphConvSequential, PairSequential, create_fcn_lay
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs
 from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import save_model, count_parameters, load_model
+from ivpgan.utils.train_helpers import count_parameters
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -403,7 +403,7 @@ class IntegratedViewDTI(Trainer):
     def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
                        tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
-        model.load_state_dict(load_model(model_dir, model_name))
+        model.load_state_dict(io.load_model(model_dir, model_name))
         model.eval()
 
         print("Model evaluation...")
@@ -632,7 +632,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        save_model(model, flags["model_dir"],
+        io.save_model(model, flags["model_dir"],
                    "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
                                                   score))
 

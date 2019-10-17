@@ -219,13 +219,17 @@ def process_weave_view_data(X, prot_desc_dict, idx):
     atom_to_pair = []
     pair_split = []
     prot_descriptor = []
+    n_atoms_list = []
     start = 0
     x_data = X[:, 0, idx]
     for im, pair in enumerate(x_data):
         mol, prot = pair
         n_atoms = mol.get_num_atoms()
+        n_atoms_list.append(n_atoms)
+
         # number of atoms in each molecule
         atom_split.extend([im] * n_atoms)
+
         # index of pair features
         C0, C1 = np.meshgrid(np.arange(n_atoms), np.arange(n_atoms))
         atom_to_pair.append(
@@ -249,8 +253,9 @@ def process_weave_view_data(X, prot_desc_dict, idx):
         cuda(torch.tensor(np.concatenate(atom_feat, axis=0), dtype=torch.float)),
         cuda(torch.tensor(np.concatenate(pair_feat, axis=0), dtype=torch.float)),
         cuda(torch.tensor(np.array(pair_split), dtype=torch.int)),
+        cuda(torch.tensor(np.concatenate(atom_to_pair, axis=0), dtype=torch.long)),
         cuda(torch.tensor(np.array(atom_split), dtype=torch.int)),
-        cuda(torch.tensor(np.concatenate(atom_to_pair, axis=0), dtype=torch.long))
+        cuda(torch.tensor(n_atoms_list, dtype=torch.long))
     ]
     return mol_data, cuda(prots_tensor.float())
 
@@ -264,12 +269,20 @@ def process_gconv_view_data(X, prot_desc_dict, idx):
     :return:
     """
     mol_data = []
+    n_atoms_list = []
     x_data = X[:, 0, idx]
-    mols = [pair[0] for pair in x_data]
+    mols = []
+    for pair in x_data:
+        mol, prot = pair
+        n_atoms = mol.get_num_atoms()
+        n_atoms_list.append(n_atoms)
+        mols.append(mol)
+
     multiConvMol = ConvMol.agglomerate_mols(mols)
     mol_data.append(cuda(torch.from_numpy(multiConvMol.get_atom_features())))
     mol_data.append(cuda(torch.from_numpy(multiConvMol.deg_slice)))
     mol_data.append(cuda(torch.tensor(multiConvMol.membership)))
+    mol_data.append(cuda(torch.tensor(n_atoms_list, dtype=torch.long)))
     for i in range(1, len(multiConvMol.get_deg_adjacency_lists())):
         mol_data.append(cuda(torch.from_numpy(multiConvMol.get_deg_adjacency_lists()[i])))
 

@@ -29,7 +29,7 @@ from tqdm import tqdm
 
 from ivpgan import cuda
 from ivpgan.data import Dataset
-from ivpgan.nn.layers import Flatten, CIV
+from ivpgan.nn.layers import Flatten, ConcatLayer
 from ivpgan.nn.models import NonsatActivation, create_fcn_layers, NwayForward, DINA, Projector
 from ivpgan.utils import Trainer
 from ivpgan.utils.math import ExpAverage
@@ -70,7 +70,8 @@ class MnistPoc(Trainer):
             vws_lst.append(net)
         l = max(l_dims)
         model = nn.Sequential(NwayForward(vws_lst),
-                              DINA(out_dim=hparams["dina_out_dim"], heads=hparams["attn_heads"]),
+                              DINA(heads=hparams["attn_heads"]),
+                              # DINA(heads=hparams["attn_heads"]),
                               Projector(in_features=l * hparams["num_views"],
                                         out_features=hparams["dina_out_dim"],
                                         pool=hparams["proj_pool_func"]),
@@ -457,7 +458,7 @@ def get_hparams(flags):
         "num_views": len(flags.views),
         "attn_heads": 1,
         "views_in_shape": [(1, 392), (1, 392), (1, 784), (1, 784)],
-        "tr_bsize": 512,
+        "tr_bsize": 128,
         "val_bsize": 128,
         "dina_out_dim": 512,
         "proj_pool_func": "avg",

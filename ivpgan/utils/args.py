@@ -13,7 +13,6 @@ from __future__ import unicode_literals
 from abc import ABC
 from torch.nn import ReLU, Sigmoid, Tanh, ELU, Softmax, LeakyReLU
 
-
 # Helper classes for packaging arguments to torch.nn modules.
 from ivpgan.nn.models import NonsatActivation
 

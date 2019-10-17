@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
 
-from ivpgan.nn.layers import Linear, Conv1d, Conv2d
+from ivpgan.nn.layers import Linear, Conv1d, Conv2d, ConcatLayer, WeaveGather2D
 from ivpgan.nn.layers import WeaveGather, WeaveLayer, GraphConvLayer, GraphGather, GraphPool, WeaveBatchNorm, \
     WeaveDropout
 from ivpgan.utils.train_helpers import get_activation_func
@@ -161,7 +161,7 @@ def create_fcn_layers(fcn_args):
     return layers
 
 
-def create_weave_layers(weave_args):
+def create_weave_layers(weave_args, update_pair):
     layers = []
     for weave_arg in weave_args:
         weave = WeaveLayer(*weave_arg.args)
@@ -169,12 +169,12 @@ def create_weave_layers(weave_args):
 
         # Batch normalization
         if weave_arg.use_batch_norm:
-            bn = WeaveBatchNorm(atom_dim=weave_arg[2], pair_dim=weave_arg[3])
+            bn = WeaveBatchNorm(atom_dim=weave_arg[2], pair_dim=weave_arg[3], update_pair=update_pair)
             layers.append(bn)
 
         # Dropout
         if weave_arg.dropout > 0:
-            dr = WeaveDropout(weave_arg.dropout)
+            dr = WeaveDropout(weave_arg.dropout, update_pair=update_pair)
             layers.append(dr)
     return layers
 
@@ -213,30 +213,39 @@ def create_graph_conv_layers(gconv_args):
 
 class WeaveModel(nn.Module):
 
-    def __init__(self, weave_args, weave_gath_arg):
+    def __init__(self, weave_args, weave_gath_arg, update_pair=False, weave_type='1D'):
         """
         Creates a weave model
 
         :param weave_args: A list of weave arguments.
         :param weave_gath_arg: A weave gather argument.
+        :param update_pair: Whether to return the pair-wise embeddings.
         """
         super(WeaveModel, self).__init__()
-        layers = create_weave_layers(weave_args)
-        weave_gath = WeaveGather(*weave_gath_arg.args)
-        layers.append(weave_gath)
-        self.weave = WeaveSequential(*layers)
+        self.update_pair = update_pair
+        layers = create_weave_layers(weave_args, update_pair)
+        if weave_gath_arg:
+            if weave_type.lower() == '1d':
+                weave_gath = WeaveGather(*weave_gath_arg.args)
+            else:
+                weave_gath = WeaveGather2D(*weave_gath_arg)
+            layers.append(weave_gath)
+        self.weave_seq = WeaveSequential(*layers)
         # in_dim = weave_args[-1][2]
         # out_dim = weave_gath_arg[1]
         # self.linear = nn.Linear(in_dim, out_dim)
 
-    def forward(self, input):
+    def forward(self, input, need_pair_feat=False):
         """
 
+        :param need_pair_feat: Whether to return features of atom-atom pairs.
         :param input: The input structure is: [atom_features, pair_features, pair_split, atom_split, atom_to_pair]
         :return: Features of molecules.
         """
-        output = self.weave(input)
-        return output
+        output = self.weave_seq(input)
+        if need_pair_feat:
+            return output
+        return output[0]
 
 
 class WeaveSequential(nn.Sequential):
@@ -261,7 +270,7 @@ class WeaveSequential(nn.Sequential):
             if isinstance(module, WeaveBatchNorm) or isinstance(module, WeaveDropout):
                 A, P = module(A, P)
             elif isinstance(module, WeaveGather):
-                return module([A, input[3]])  # returns the molecule features
+                return module([A, P, *input[4:]])  # returns the molecule features
             else:
                 A, P = module(input)
         return A, P
@@ -308,20 +317,6 @@ class GraphConvSequential(nn.Sequential):
         return input[0]
 
 
-class CIV(nn.Module):
-    """Combined Input Vector module.
-    It's basically a wrapper for torch.cat to enable its inclusion in nn.Sequential objects.
-    """
-
-    def __init__(self, dim):
-        super(CIV, self).__init__()
-        self.dim = dim
-
-    def forward(self, input):
-        combined = torch.cat(input, dim=self.dim)
-        return combined
-
-
 class PairSequential(nn.Module):
     """Handy approach to manage protein and compound models"""
 
@@ -329,7 +324,7 @@ class PairSequential(nn.Module):
         super(PairSequential, self).__init__()
         self.comp_tup = nn.ModuleList(mod1)
         self.prot_tup = nn.ModuleList(mod2)
-        self.civ = CIV(dim=civ_dim)
+        self.civ = ConcatLayer(dim=civ_dim)
 
     def forward(self, inputs):
         comp_input, prot_input = inputs
@@ -381,14 +376,13 @@ def nonsat_activation(x, ep=1e-4, max_iter=100):
             i += 1
             y = y_.detach()
 
+
 class DINA(nn.Module):
 
-    def __init__(self, out_dim, activation=torch.relu, heads=1, bias=True):
+    def __init__(self, activation=torch.relu, heads=1, bias=True):
         super(DINA, self).__init__()
-        self.out_dim = out_dim
         self.heads = heads
         self.add_bias = bias
-        self.batch_norm = nn.BatchNorm1d(out_dim)
         self.batch_norm_2d = nn.BatchNorm2d(1)
         self.register_parameter('U', None)
         self.activation = activation
@@ -415,9 +409,10 @@ class DINA(nn.Module):
         :return: tuple
             attention vectors.
         """
-        L = [0] + [c.shape[1] for c in contexts]
+        L = [c.shape[1] for c in contexts]
         c = max([m.shape[-1] for m in contexts])
         q = sum(L)
+        scaling = c ** -0.5
         device = contexts[0].device
 
         # pad where necessary
@@ -437,6 +432,7 @@ class DINA(nn.Module):
         K = M.bmm(U).bmm(M.permute(0, 2, 1))
         # normalize each sample
         # K = self.batch_norm_2d(K.unsqueeze(dim=1)).squeeze()
+        K = K * scaling
         K = self.activation(K)
         K = K.reshape(self.heads, K.shape[0] // self.heads, *K.shape[1:])
 
@@ -456,8 +452,10 @@ class DINA(nn.Module):
 
         # attention
         reps = []
+        offset = 0
         for i, context in enumerate(contexts):
-            a = alpha[:, :, L[i]:L[i] + L[i + 1]]
+            a = alpha[:, :, offset: offset + L[i]]
+            offset += L[i]
             wt = torch.softmax(a, dim=2)
             wt = wt.unsqueeze(dim=2)
             wt = wt.reshape(-1, *wt.shape[2:])
@@ -487,7 +485,7 @@ class NwayForward(nn.Module):
         outs = []
         for i, model in enumerate(self.models):
             outs.append(model(inputs[i]))
-        return outs
+        return outs[:3]
 
 
 class Projector(nn.Module):
