@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import gzip
 import os
+import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -107,22 +108,26 @@ def load_data(data_file, url, normalize=True):
     return [(train_set_x, train_set_y), (test_set_x, test_set_y)]
 
 
-def load_pickle(f):
-    """
-    loads and returns the content of a pickled file
-    it handles the inconsistencies between the pickle packages available in Python 2 and 3
-    """
-    try:
-        import cPickle as thepickle
-    except ImportError:
-        import _pickle as thepickle
+# def load_pickle(f):
+#     """
+#     loads and returns the content of a pickled file
+#     it handles the inconsistencies between the pickle packages available in Python 2 and 3
+#     """
+#     try:
+#         import cPickle as thepickle
+#     except ImportError:
+#         import _pickle as thepickle
+#
+#     try:
+#         ret = thepickle.load(f, encoding='latin1')
+#     except TypeError:
+#         ret = thepickle.load(f)
+#
+#     return ret
 
-    try:
-        ret = thepickle.load(f, encoding='latin1')
-    except TypeError:
-        ret = thepickle.load(f)
-
-    return ret
+def load_pickle(file_name):
+    with open(file_name, 'rb') as f:
+        return pickle.load(f)
 
 
 def make_numpy_array(data_xy):

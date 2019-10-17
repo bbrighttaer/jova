@@ -192,6 +192,7 @@ def process_ecfp_view_data(X, prot_desc_dict, idx):
     :return:
     """
     mols_tensor = prots_tensor = None
+    prot_names = None
     if X is not None:
         x_data = X[:, 0, idx]
         mols = [pair[0] for pair in x_data]
@@ -202,7 +203,7 @@ def process_ecfp_view_data(X, prot_desc_dict, idx):
         prot_desc = np.array(prot_desc)
         prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
         prots_tensor = torch.from_numpy(prot_desc)
-    return cuda(mols_tensor.float()), cuda(prots_tensor.float())
+    return cuda(mols_tensor.float()), cuda(prots_tensor.float()), prot_names
 
 
 def process_weave_view_data(X, prot_desc_dict, idx):
@@ -222,10 +223,12 @@ def process_weave_view_data(X, prot_desc_dict, idx):
     n_atoms_list = []
     start = 0
     x_data = X[:, 0, idx]
+    prot_names = []
     for im, pair in enumerate(x_data):
         mol, prot = pair
         n_atoms = mol.get_num_atoms()
         n_atoms_list.append(n_atoms)
+        prot_names.append(prot.get_name())
 
         # number of atoms in each molecule
         atom_split.extend([im] * n_atoms)
@@ -257,7 +260,7 @@ def process_weave_view_data(X, prot_desc_dict, idx):
         cuda(torch.tensor(np.array(atom_split), dtype=torch.int)),
         cuda(torch.tensor(n_atoms_list, dtype=torch.long))
     ]
-    return mol_data, cuda(prots_tensor.float())
+    return mol_data, cuda(prots_tensor.float()), prot_names
 
 
 def process_gconv_view_data(X, prot_desc_dict, idx):
@@ -295,7 +298,7 @@ def process_gconv_view_data(X, prot_desc_dict, idx):
     prots_tensor = cuda(torch.from_numpy(prot_desc))
 
     batch_size = len(x_data)
-    return mol_data, prots_tensor.float()
+    return mol_data, prots_tensor.float(), prot_names
 
 
 def cuda(tensor):

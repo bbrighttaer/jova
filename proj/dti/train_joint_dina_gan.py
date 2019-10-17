@@ -21,6 +21,7 @@ import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from deepchem.trans import undo_transforms
+from soek import RealParam, DictParam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -36,7 +37,7 @@ from ivpgan.nn.models import GraphConvSequential, create_fcn_layers, WeaveModel,
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters
+from ivpgan.utils.train_helpers import count_parameters, load_pickle
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -47,10 +48,10 @@ check_data = False
 
 torch.cuda.set_device(0)
 
-use_ecfp8 = False
-use_weave = True
+use_ecfp8 = True
+use_weave = False
 use_gconv = True
-use_prot = False
+use_prot = True
 
 
 def create_ecfp_net(hparams):
@@ -63,7 +64,10 @@ def create_prot_net(hparams):
     if hparams["prot"]["model_type"] == "embedding":
         pass
     else:
-        model = nn.Sequential(Unsqueeze(dim=1))
+        model = nn.Sequential(nn.Linear(hparams["prot"]["in_dim"], hparams["prot"]["dim"]),
+                              nn.BatchNorm1d(hparams["prot"]["dim"]),
+                              nn.ReLU(),
+                              Unsqueeze(dim=1))
     return model
 
 
@@ -279,7 +283,7 @@ class IntegratedViewDTI(Trainer):
 
     @staticmethod
     def train(eval_fn, models, optimizers, data_loaders, metrics, weighted_loss, neigh_dist, transformers_dict,
-              prot_desc_dict, tasks, n_iters=5000, sim_data_node=None):
+              prot_desc_dict, prot_profile, prot_vocab, tasks, n_iters=5000, sim_data_node=None):
         generator, discriminator = models
         optimizer_gen, optimizer_disc = optimizers
 
@@ -463,7 +467,7 @@ class IntegratedViewDTI(Trainer):
 
     @staticmethod
     def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
-                       tasks, sim_data_node=None):
+                       prot_profile, prot_vocab, tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
         model.load_state_dict(io.load_model(model_dir, model_name))
         model.eval()
@@ -571,7 +575,10 @@ def main(flags):
     num_cuda_dvcs = torch.cuda.device_count()
     cuda_devices = None if num_cuda_dvcs == 1 else [i for i in range(1, num_cuda_dvcs)]
 
+    # Runtime Protein stuff
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
+    prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
+    flags["prot_vocab_size"] = len(prot_vocab)
 
     for seed in seeds:
         # for data collection of this round of simulation.
@@ -627,6 +634,8 @@ def main(flags):
                                    "data_dict": data_dict}
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
+                                    "prot_profile": prot_profile,
+                                    "prot_vocab": prot_vocab,
                                     "tasks": tasks,
                                     "n_iters": 3000}
 
@@ -657,13 +666,15 @@ def main(flags):
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
+                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, prot_profile,
+                             prot_vocab, data_node, view)
 
     # save simulation data resource tree to file.
     sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view):
+def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, prot_profile, prot_vocab,
+                 data_node, view):
     hyper_params = default_hparams_bopt(flags)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
@@ -673,14 +684,14 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
         for k in range(flags["fold_num"]):
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
-            start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
+            start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, prot_profile, prot_vocab, tasks, trainer,
                        transformers_dict, view, k)
     else:
-        start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
+        start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, prot_profile, prot_vocab, tasks, trainer,
                    transformers_dict, view)
 
 
-def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
+def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, prot_profile, prot_vocab, tasks, trainer,
                transformers_dict, view, k=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics, weighted_loss, neigh_dist = trainer.initialize(hparams=hyper_params,
@@ -689,13 +700,13 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                                                                             test_dataset=data["test"])
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model[0], flags["model_dir"], flags["eval_model_name"],
-                               data_loaders, metrics, transformers_dict,
-                               prot_desc_dict, tasks, sim_data_node=sim_data_node)
+                               data_loaders, metrics, transformers_dict, prot_desc_dict, prot_profile, prot_vocab,
+                               tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
         model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, weighted_loss,
-                                            neigh_dist, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
-                                            sim_data_node=sim_data_node)
+                                            neigh_dist, transformers_dict, prot_desc_dict, prot_profile, prot_vocab,
+                                            tasks, n_iters=10000, sim_data_node=sim_data_node)
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
@@ -706,6 +717,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
 
 def default_hparams_rand(flags):
     return {
+        "prot_vocab_size": flags["prot_vocab_size"],
         "attn_heads": 1,
         "n_ways": 3,
         "proj_out_dim": 512,
@@ -754,6 +766,7 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
+        "prot_vocab_size": flags["prot_vocab_size"],
         "attn_heads": (1,),
         "proj_out_dim": 256,
         "disc_hdims": [724, 561],
@@ -785,7 +798,8 @@ def default_hparams_bopt(flags):
 
         "prot": {
             "model_type": "Identity",
-            "dim": 8421,
+            "in_dim": 8421,
+            "dim": 256,
         },
         "weave": {
             "dim": 50,
@@ -802,35 +816,50 @@ def default_hparams_bopt(flags):
 
 def get_hparam_config(flags):
     return {
-        "prot_dim": ConstantParam(8421),
-        "fp_dim": ConstantParam(1024),
-        "gconv_dim": ConstantParam(128),
-        "hdims": ConstantParam([2286, 1669, 2590]),
-        "disc_hdims": DiscreteParam(min=100, max=1000, size=DiscreteParam(min=1, max=2)),
+        "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
+        "attn_heads": ConstantParam([1, 1]),
+        "proj_out_dim": CategoricalParam([128, 256]),
+        "disc_hdims": DiscreteParam(min=128, max=2048, size=DiscreteParam(min=1, max=3)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
 
-        "weighted_loss": LogRealParam(min=-1),
+        "weighted_loss": RealParam(min=0.1),
 
         # dropout
-        "dprob": ConstantParam(0.0519347),
-        "disc_dprob": LogRealParam(min=-2),
-        "neigh_dist": DiscreteParam(min=5, max=20),
+        "dprob": RealParam(0.1),
+        "disc_dprob": RealParam(0.1),
 
-        "tr_batch_size": ConstantParam(256),
-        "val_batch_size": ConstantParam(512),
-        "test_batch_size": ConstantParam(512),
+        "neigh_dist": DiscreteParam(min=1, max=20),
+
+        "tr_batch_size": CategoricalParam(choices=[64, 128, 256]),
+        "val_batch_size": ConstantParam(128),
+        "test_batch_size": ConstantParam(128),
 
         # optimizer params
-        "optimizer_gen": ConstantParam("adagrad"),
-        "optimizer_gen__global__weight_decay": ConstantParam(0.00312756),
-        "optimizer_gen__global__lr": ConstantParam(0.000867065),
-        "optimizer_gen__adagrad__lr_decay": ConstantParam(0.000496165),
-        "optimizer_disc": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
+        "optimizer_gen": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
+        "optimizer_gen__global__weight_decay": LogRealParam(),
+        "optimizer_gen__global__lr": LogRealParam(),
+        "optimizer_gen__adagrad__lr_decay": LogRealParam(),
+        "optimizer_disc": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer_disc__global__weight_decay": LogRealParam(),
         "optimizer_disc__global__lr": LogRealParam(),
 
+        "prot": DictParam({
+            "model_type": ConstantParam("Identity"),
+            "in_dim": ConstantParam(8421),
+            "dim": CategoricalParam([128, 256, 512]),
+        }),
+        "weave": DictParam({
+            "dim": CategoricalParam([128, 256, 512]),
+            "update_pairs": ConstantParam(False),
+        }),
+        "gconv": DictParam({
+            "dim": CategoricalParam([128, 256, 512]),
+        }),
+        "ecfp8": DictParam({
+            "dim": ConstantParam(1024),
+        })
     }
 
 
@@ -858,6 +887,15 @@ def verify_multiview_data(data_dict, cv_data=True):
         print('#' * 100)
         corr.append(ecfp8 == weave == gconv)
     print(corr)
+
+
+class Flags(object):
+    # enables using either object referencing or dict indexing to retrieve user passed arguments of flag objects.
+    def __getitem__(self, item):
+        return self.__dict__[item]
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
 
 
 if __name__ == '__main__':
@@ -927,11 +965,14 @@ if __name__ == '__main__':
                         action='append',
                         help='A list containing paths to protein descriptors.'
                         )
-    # parser.add_argument('--seed',
-    #                     type=int,
-    #                     action="append",
-    #                     default=[123, 124, 125],
-    #                     help='Random seeds to be used.')
+    parser.add_argument('--prot_profile',
+                        type=str,
+                        help='A resource for retrieving embedding indexing profile of proteins.'
+                        )
+    parser.add_argument('--prot_vocab',
+                        type=str,
+                        help='A resource containing all N-gram segments/words constructed from the protein sequences.'
+                        )
     parser.add_argument('--no_reload',
                         action="store_false",
                         dest='reload',
@@ -957,28 +998,9 @@ if __name__ == '__main__':
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
 
     args = parser.parse_args()
-
-    FLAGS = dict()
-    FLAGS['dataset'] = args.dataset
-    FLAGS['fold_num'] = args.fold_num
-    FLAGS['cv'] = True if FLAGS['fold_num'] > 2 else False
-    FLAGS['test'] = args.test
-    FLAGS['splitting_alg'] = args.splitting_alg
-    FLAGS['filter_threshold'] = args.filter_threshold
-    FLAGS['cold_drug'] = args.cold_drug
-    FLAGS['cold_target'] = args.cold_target
-    FLAGS['cold_drug_cluster'] = args.cold_drug_cluster
-    FLAGS['predict_cold'] = args.predict_cold
-    FLAGS['model_dir'] = args.model_dir
-    FLAGS['model_name'] = args.model_name
-    FLAGS['prot_desc_path'] = args.prot_desc_path
-    # FLAGS['seeds'] = args.seed
-    FLAGS['reload'] = args.reload
-    FLAGS['data_dir'] = args.data_dir
-    FLAGS['split_warm'] = args.split_warm
-    FLAGS['hparam_search'] = args.hparam_search
-    FLAGS["hparam_search_alg"] = args.hparam_search_alg
-    FLAGS["eval"] = args.eval
-    FLAGS["eval_model_name"] = args.eval_model_name
-
-    main(flags=FLAGS)
+    flags = Flags()
+    args_dict = args.__dict__
+    for arg in args_dict:
+        setattr(flags, arg, args_dict[arg])
+    setattr(flags, "cv", True if flags.fold_num > 2 else False)
+    main(flags)
