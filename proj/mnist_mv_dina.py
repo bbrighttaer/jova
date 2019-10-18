@@ -456,7 +456,7 @@ def get_hparams(flags):
         "coord": flags.coord,
         "latent_dim": 50,
         "num_views": len(flags.views),
-        "attn_heads": 1,
+        "attn_heads": 2,
         "views_in_shape": [(1, 392), (1, 392), (1, 784), (1, 784)],
         "tr_bsize": 128,
         "val_bsize": 128,

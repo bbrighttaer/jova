@@ -86,7 +86,7 @@ def load_data(data_file, url, normalize=True):
     print('loading data ...')
     path = get_file(data_file, origin=url)
     f = gzip.open(path, 'rb')
-    train_set, valid_set, test_set = load_pickle(f)
+    train_set, valid_set, test_set = load_gzip_pickle(f)
     f.close()
 
     train_set_x, train_set_y = make_numpy_array(train_set)
@@ -108,22 +108,22 @@ def load_data(data_file, url, normalize=True):
     return [(train_set_x, train_set_y), (test_set_x, test_set_y)]
 
 
-# def load_pickle(f):
-#     """
-#     loads and returns the content of a pickled file
-#     it handles the inconsistencies between the pickle packages available in Python 2 and 3
-#     """
-#     try:
-#         import cPickle as thepickle
-#     except ImportError:
-#         import _pickle as thepickle
-#
-#     try:
-#         ret = thepickle.load(f, encoding='latin1')
-#     except TypeError:
-#         ret = thepickle.load(f)
-#
-#     return ret
+def load_gzip_pickle(f):
+    """
+    loads and returns the content of a pickled file
+    it handles the inconsistencies between the pickle packages available in Python 2 and 3
+    """
+    try:
+        import cPickle as thepickle
+    except ImportError:
+        import _pickle as thepickle
+
+    try:
+        ret = thepickle.load(f, encoding='latin1')
+    except TypeError:
+        ret = thepickle.load(f)
+
+    return ret
 
 def load_pickle(file_name):
     with open(file_name, 'rb') as f:
