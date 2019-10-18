@@ -48,6 +48,7 @@ def get_logger(name=None, level='INFO', stream='stderr', filename=None, log_dir=
         handlers=handlers)
     return logging.getLogger(name)
 
+
 def save_model(model, path, name):
     """
     Saves the model parameters.
@@ -58,8 +59,10 @@ def save_model(model, path, name):
     :return:
     """
     os.makedirs(path, exist_ok=True)
-    file = os.path.join(path, name + ".mod")
-    torch.save(model.state_dict(), file)
+    # file = os.path.join(path, name + ".mod")
+    # torch.save(model.state_dict(), file)
+    with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
+        f.write(name + '\n')
 
 
 def load_model(path, name):

@@ -426,6 +426,7 @@ class DINA(nn.Module):
         # padding
         h_reps = []
         M = torch.cat(contexts, dim=1).to(device)
+        # todo(bbrighttaer): parallelize
         for h in range(self.heads):
             U = torch.stack([self.U[h, :, :].squeeze()] * M.shape[0], dim=0)
             K = M.bmm(U).bmm(M.permute(0, 2, 1))
@@ -461,7 +462,7 @@ class DINA(nn.Module):
                 reps.append(r)
             h_reps.append(reps)
         c_hat = []
-        for i in range(len(h_reps[0])):
+        for i in range(len(contexts)):
             c_hat.append(torch.stack([c_lst[i] for c_lst in h_reps], dim=0).permute(1, 0, 2))
         return c_hat
 
@@ -489,6 +490,9 @@ class NwayForward(nn.Module):
 
 
 class Projector(nn.Module):
+    """
+    Takes a list of 3D inputs and returns a list of 2D inputs.
+    """
 
     def __init__(self, in_features, out_features, bias=True, pool='avg', batch_norm=True, activation='relu'):
         super(Projector, self).__init__()
@@ -525,3 +529,42 @@ class Projector(nn.Module):
             X = self.bn(X)
         X = self.activation(X)
         return X
+
+
+class ProteinFeatLearning(nn.Module):
+
+    def __init__(self, protein_profile, vocab_size, embedding_dim, hidden_dim, dropout, num_layers=1,
+                 bidrectional=False, activation='nonsat'):
+        super(ProteinFeatLearning, self).__init__()
+        self.protein_profile = protein_profile
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.directions = max(1, int(bidrectional) + 1)
+        self.activation = get_activation_func(activation)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        if num_layers == 1:
+            dropout = 0
+        self.model = nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True,
+                             dropout=dropout, bidirectional=bidrectional)
+
+    def forward(self, input):
+        # retrieve protein embedding profiles
+        x = [self.protein_profile[prot[1]].tolist() for prot in input]
+
+        # pad sequences
+        max_seq = max([len(p) for p in x])
+        x = [vec + [0] * (max_seq - len(vec)) for vec in x]
+        x = torch.tensor(x, dtype=torch.long).to(self.embedding.weight.device)
+
+        # get protein embeddings
+        embeds = self.embedding(x)
+
+        # RNN initial states
+        # (layer_dim * num_directions, batch_size, hidden_dim)
+        h0 = torch.zeros(self.num_layers * self.directions, x.size(0), self.hidden_dim).to(embeds.device)
+        c0 = torch.zeros(self.num_layers * self.directions, x.size(0), self.hidden_dim).to(embeds.device)
+
+        # forward pass
+        output, _ = self.model(embeds, (h0, c0))
+        output = self.activation(output)
+        return output
