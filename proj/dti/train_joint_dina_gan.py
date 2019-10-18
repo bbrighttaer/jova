@@ -163,9 +163,9 @@ def create_discriminator_net(hparams):
     for dim in layers:
         conf = FcnArgs(in_features=p,
                        out_features=dim,
-                       activation='relu',
+                       activation='nonsat',
                        batch_norm=True,
-                       dropout=hparams["disc_dprob"])
+                       dropout=hparams["dprob"])
         fcn_args.append(conf)
         p = dim
     fcn_args.append(FcnArgs(in_features=p, out_features=1, activation="sigmoid"))
@@ -580,6 +580,9 @@ def main(flags):
     prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
     flags["prot_vocab_size"] = len(prot_vocab)
 
+    # For searching over multiple seeds
+    hparam_search = None
+
     for seed in seeds:
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -641,26 +644,27 @@ def main(flags):
 
                 hparams_conf = get_hparam_config(flags)
 
-                search_alg = {"random_search": RandomSearchCV,
-                              "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
-                                                                        BayesianOptSearchCV)
-
-                hparam_search = search_alg(hparam_config=hparams_conf,
-                                           num_folds=k,
-                                           initializer=trainer.initialize,
-                                           data_provider=trainer.data_provider,
-                                           train_fn=trainer.train,
-                                           eval_fn=trainer.evaluate,
-                                           save_model_fn=io.save_model,
-                                           init_args=extra_init_args,
-                                           data_args=extra_data_args,
-                                           train_args=extra_train_args,
-                                           data_node=data_node,
-                                           split_label=split_label,
-                                           sim_label=view,
-                                           dataset_label=dataset_lbl,
-                                           results_file="{}_{}_dti_{}.csv".format(flags["hparam_search_alg"], view,
-                                                                                  date_label))
+                if hparam_search is None:
+                    search_alg = {"random_search": RandomSearchCV,
+                                  "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
+                                                                            BayesianOptSearchCV)
+                    hparam_search = search_alg(hparam_config=hparams_conf,
+                                               num_folds=k,
+                                               initializer=trainer.initialize,
+                                               data_provider=trainer.data_provider,
+                                               train_fn=trainer.train,
+                                               eval_fn=trainer.evaluate,
+                                               save_model_fn=io.save_model,
+                                               init_args=extra_init_args,
+                                               data_args=extra_data_args,
+                                               train_args=extra_train_args,
+                                               data_node=data_node,
+                                               split_label=split_label,
+                                               sim_label=view,
+                                               dataset_label=dataset_lbl,
+                                               results_file="{}_{}_dti_dina_{}.csv".format(flags["hparam_search_alg"],
+                                                                                           view,
+                                                                                           date_label))
 
                 stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=10, seed=seed)
                 print(stats)
@@ -817,7 +821,7 @@ def default_hparams_bopt(flags):
 def get_hparam_config(flags):
     return {
         "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
-        "attn_heads": ConstantParam([1, 1]),
+        "attn_heads": DiscreteParam(min=1, max=1, size=DiscreteParam(min=1, max=2)),
         "proj_out_dim": CategoricalParam([128, 256]),
         "disc_hdims": DiscreteParam(min=128, max=2048, size=DiscreteParam(min=1, max=3)),
 
@@ -828,7 +832,7 @@ def get_hparam_config(flags):
 
         # dropout
         "dprob": RealParam(0.1),
-        "disc_dprob": RealParam(0.1),
+        # "disc_dprob": RealParam(0.1),
 
         "neigh_dist": DiscreteParam(min=1, max=20),
 
@@ -840,7 +844,7 @@ def get_hparam_config(flags):
         "optimizer_gen": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer_gen__global__weight_decay": LogRealParam(),
         "optimizer_gen__global__lr": LogRealParam(),
-        "optimizer_gen__adagrad__lr_decay": LogRealParam(),
+        # "optimizer_gen__adagrad__lr_decay": LogRealParam(),
         "optimizer_disc": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer_disc__global__weight_decay": LogRealParam(),
         "optimizer_disc__global__lr": LogRealParam(),
@@ -848,7 +852,7 @@ def get_hparam_config(flags):
         "prot": DictParam({
             "model_type": ConstantParam("Identity"),
             "in_dim": ConstantParam(8421),
-            "dim": CategoricalParam([128, 256, 512]),
+            "dim": DiscreteParam(min=128, max=2048),
         }),
         "weave": DictParam({
             "dim": CategoricalParam([128, 256, 512]),

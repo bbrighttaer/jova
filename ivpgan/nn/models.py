@@ -485,7 +485,7 @@ class NwayForward(nn.Module):
         outs = []
         for i, model in enumerate(self.models):
             outs.append(model(inputs[i]))
-        return outs[:3]
+        return outs
 
 
 class Projector(nn.Module):
