@@ -385,6 +385,8 @@ class DINA(nn.Module):
         self.add_bias = bias
         self.batch_norm_2d = nn.BatchNorm2d(1)
         self.register_parameter('U', None)
+        self.register_parameter('W', None)
+        self.register_parameter('b', None)
         self.activation = activation
         self._mask_mul = None
         self._mask_add = None
@@ -402,7 +404,6 @@ class DINA(nn.Module):
     def forward(self, contexts):
         """
         Applies a Direction-Invariant N-way Attention to the given contexts.
-
         :param contexts: tuple
             The N contexts for computing the attention vectors.
             Each element's shape must be (batch_size, l, d)
@@ -424,46 +425,50 @@ class DINA(nn.Module):
             init.xavier_normal_(self.U)
 
         # padding
-        h_reps = []
         M = torch.cat(contexts, dim=1).to(device)
-        for h in range(self.heads):
-            U = torch.stack([self.U[h, :, :].squeeze()] * M.shape[0], dim=0)
-            K = M.bmm(U).bmm(M.permute(0, 2, 1))
-            # normalize each sample
-            # K = self.batch_norm_2d(K.unsqueeze(dim=1)).squeeze()
-            K = K * scaling
-            K = self.activation(K)
+        batch_sz = M.shape[0]
+        M = M.repeat(self.heads, 1, 1, 1)
+        U = [self.U[i, :, :].squeeze().repeat(batch_sz, 1, 1) for i in range(self.heads)]
+        U = torch.stack(U)
+        m_shape = M.shape
+        M_3d = M.reshape(self.heads, -1, M.shape[-1])
+        U_3d = U.reshape(self.heads, M.shape[-1], -1)
+        K = M_3d.bmm(U_3d).bmm(M.view(m_shape[0], -1, m_shape[2]))
+        # normalize each sample
+        # K = self.batch_norm_2d(K.unsqueeze(dim=1)).squeeze()
+        K = K * scaling
+        K = self.activation(K)
+        K = K.reshape(self.heads, batch_sz, K.shape[-1], K.shape[-1])
 
-            # masking
-            if self._mask_mul is None or q != self._mask_mul.shape[1]:
-                self._mask_mul = self._diag_sub_mat_mask(dim=q, sizes=L[1:], dvc=M.device, diag_fill_val=0)
-                self._mask_add = self._diag_sub_mat_mask(dim=q, sizes=L[1:], dvc=M.device,
-                                                         diag_fill_val=torch.min(K).item(),
-                                                         off_diag_fill_func=torch.zeros)
-            K_hat = K * self._mask_mul
-            K_hat = K_hat + self._mask_add
+        # masking
+        if self._mask_mul is None or q != self._mask_mul.shape[1]:
+            self._mask_mul = self._diag_sub_mat_mask(dim=q, sizes=L[1:], dvc=M.device, diag_fill_val=0)
+            self._mask_add = self._diag_sub_mat_mask(dim=q, sizes=L[1:], dvc=M.device,
+                                                     diag_fill_val=torch.min(K).item(),
+                                                     off_diag_fill_func=torch.zeros)
+        K_hat = K * self._mask_mul
+        K_hat = K_hat + self._mask_add
 
-            # max pooling
-            cols, _ = torch.max(K_hat, dim=1)
-            rows, _ = torch.max(K_hat, dim=2)
-            alpha = rows + cols
+        # max pooling
+        cols, _ = torch.max(K_hat, dim=2)
+        rows, _ = torch.max(K_hat, dim=3)
+        alpha = rows + cols
 
-            # attention
-            reps = []
-            offset = 0
-            for i, context in enumerate(contexts):
-                C = context
-                a = alpha[:, offset: offset + L[i]]
-                offset += L[i]
-                wt = torch.softmax(a, dim=1)
-                wt = wt.unsqueeze(dim=1)
-                r = wt.bmm(C).squeeze()
-                reps.append(r)
-            h_reps.append(reps)
-        c_hat = []
-        for i in range(len(h_reps[0])):
-            c_hat.append(torch.stack([c_lst[i] for c_lst in h_reps], dim=0).permute(1, 0, 2))
-        return c_hat
+        # attention
+        reps = []
+        offset = 0
+        for i, context in enumerate(contexts):
+            a = alpha[:, :, offset: offset + L[i]]
+            offset += L[i]
+            wt = torch.softmax(a, dim=2)
+            wt = wt.unsqueeze(dim=2)
+            wt = wt.reshape(-1, *wt.shape[2:])
+            C = torch.stack([context] * self.heads, dim=0)
+            # C = context.repeat(self.heads, 1, 1, 1)
+            C = C.reshape(-1, *C.shape[2:])
+            r = wt.bmm(C).squeeze()
+            reps.append(r.reshape(r.shape[0] // self.heads, self.heads, -1))
+        return reps
 
     @classmethod
     def _diag_sub_mat_mask(cls, dim, sizes, dvc, off_diag_fill_func=torch.ones, diag_fill_val=-999):
