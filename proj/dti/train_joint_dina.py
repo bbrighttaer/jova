@@ -43,11 +43,11 @@ from ivpgan.utils.train_helpers import count_parameters, load_pickle
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [123, 124, 125]
+seeds = [7, 14, 21]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 use_ecfp8 = True
 use_weave = False
@@ -149,36 +149,21 @@ def create_integrated_net(hparams):
                             batch_norm=True, activation="relu", pool="avg"))
     layers.append(nn.Dropout(hparams["dprob"]))
 
+    # linear layer(s)
+    p = hparams["proj_out_dim"]
+    for dim in hparams["lin_hdims"]:
+        layers.append(nn.Linear(p, dim))
+        layers.append(nn.BatchNorm1d(dim))
+        layers.append(nn.ReLU())
+        layers.append(nn.Dropout(hparams["dprob"]))
+        p = dim
+
     # Output layer
-    # layers.append(nn.Linear(hparams["proj_out_dim"], 256))
-    # layers.append(nn.BatchNorm1d(256))
-    # layers.append(nn.ReLU())
-    # layers.append(nn.Linear(256, out_features=1))
-    layers.append(nn.Linear(hparams["proj_out_dim"], out_features=1))
+    layers.append(nn.Linear(in_features=p, out_features=1))
 
     # Build model
     model = nn.Sequential(*layers)
 
-    return model
-
-
-def create_discriminator_net(hparams):
-    fcn_args = []
-    p = hparams["neigh_dist"]
-    layers = hparams["disc_hdims"]
-    if not isinstance(layers, list):
-        layers = [layers]
-    for dim in layers:
-        conf = FcnArgs(in_features=p,
-                       out_features=dim,
-                       activation='nonsat',
-                       batch_norm=True,
-                       dropout=hparams["dprob"])
-        fcn_args.append(conf)
-        p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1, activation="sigmoid"))
-    layers = create_fcn_layers(fcn_args)
-    model = nn.Sequential(*layers)
     return model
 
 
@@ -188,13 +173,10 @@ class IntegratedViewDTI(Trainer):
     def initialize(hparams, train_dataset, val_dataset, test_dataset, cuda_devices=None, mode="regression"):
 
         # create networks
-        generator = create_integrated_net(hparams)
-        discriminator = create_discriminator_net(hparams)
-        print("Number of trainable parameters: generator={}, discriminator={}".format(count_parameters(generator),
-                                                                                      count_parameters(discriminator)))
+        model = create_integrated_net(hparams)
+        print("Number of trainable parameters: model={}".format(count_parameters(model)))
         if cuda:
-            generator = generator.cuda()
-            discriminator = discriminator.cuda()
+            model = model.cuda()
 
         # data loaders
         train_data_loader = DataLoader(dataset=train_dataset,
@@ -212,44 +194,35 @@ class IntegratedViewDTI(Trainer):
                                           shuffle=False,
                                           collate_fn=lambda x: x)
 
+        # optimizer configuration
+        optimizer = {
+            "adadelta": torch.optim.Adadelta,
+            "adagrad": torch.optim.Adagrad,
+            "adam": torch.optim.Adam,
+            "adamax": torch.optim.Adamax,
+            "asgd": torch.optim.ASGD,
+            "rmsprop": torch.optim.RMSprop,
+            "Rprop": torch.optim.Rprop,
+            "sgd": torch.optim.SGD,
+        }.get(hparams["optimizer"].lower(), None)
+        assert optimizer is not None, "{} optimizer could not be found"
+
         # filter optimizer arguments
-        optimizer_disc = optimizer_gen = None
-        for suffix in ["_gen", "_disc"]:
-            key = "optimizer{}".format(suffix)
-
-            # optimizer configuration
-            optimizer = {
-                "adadelta": torch.optim.Adadelta,
-                "adagrad": torch.optim.Adagrad,
-                "adam": torch.optim.Adam,
-                "adamax": torch.optim.Adamax,
-                "asgd": torch.optim.ASGD,
-                "rmsprop": torch.optim.RMSprop,
-                "Rprop": torch.optim.Rprop,
-                "sgd": torch.optim.SGD,
-            }.get(hparams[key].lower(), None)
-            assert optimizer is not None, "{} optimizer could not be found"
-
-            optim_kwargs = dict()
-            optim_key = hparams[key]
-            for k, v in hparams.items():
-                if "optimizer{}__".format(suffix) in k:
-                    attribute_tup = k.split("__")
-                    if optim_key == attribute_tup[1] or attribute_tup[1] == "global":
-                        optim_kwargs[attribute_tup[2]] = v
-            if suffix == "_gen":
-                optimizer_gen = optimizer(generator.parameters(), **optim_kwargs)
-            else:
-                optimizer_disc = optimizer(discriminator.parameters(), **optim_kwargs)
+        optim_kwargs = dict()
+        optim_key = hparams["optimizer"]
+        for k, v in hparams.items():
+            if "optimizer__" in k:
+                attribute_tup = k.split("__")
+                if optim_key == attribute_tup[1] or attribute_tup[1] == "global":
+                    optim_kwargs[attribute_tup[2]] = v
+        optimizer = optimizer(model.parameters(), **optim_kwargs)
 
         # metrics
         metrics = [mt.Metric(mt.rms_score, np.nanmean),
                    mt.Metric(mt.concordance_index, np.nanmean),
                    mt.Metric(mt.pearson_r2_score, np.nanmean)]
-        return (generator, discriminator), (optimizer_gen, optimizer_disc), {"train": train_data_loader,
-                                                                             "val": val_data_loader,
-                                                                             "test": test_data_loader}, metrics, \
-               hparams["weighted_loss"], hparams["neigh_dist"], hparams["prot"]["model_type"]
+        return model, optimizer, {"train": train_data_loader, "val": val_data_loader,
+                                  "test": test_data_loader}, metrics, hparams["prot"]["model_type"]
 
     @staticmethod
     def data_provider(fold, flags, data_dict):
@@ -290,24 +263,20 @@ class IntegratedViewDTI(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, models, optimizers, data_loaders, metrics, weighted_loss, neigh_dist, prot_model_type,
-              transformers_dict, prot_desc_dict, tasks, n_iters=5000, sim_data_node=None):
-        generator, discriminator = models
-        optimizer_gen, optimizer_disc = optimizers
+    def train(eval_fn, model, optimizer, data_loaders, metrics, prot_model_type, transformers_dict, prot_desc_dict,
+              tasks, n_iters=5000, sim_data_node=None):
 
         start = time.time()
-        best_model_wts = generator.state_dict()
+        best_model_wts = model.state_dict()
         best_score = -10000
         best_epoch = -1
         n_epochs = n_iters // len(data_loaders["train"])
 
         # learning rate decay schedulers
-        scheduler_gen = sch.StepLR(optimizer_gen, step_size=30, gamma=0.01)
-        scheduler_disc = sch.StepLR(optimizer_disc, step_size=30, gamma=0.01)
+        scheduler = sch.StepLR(optimizer, step_size=30, gamma=0.01)
 
         # pred_loss functions
         prediction_criterion = nn.MSELoss()
-        adversarial_loss = nn.BCELoss()
 
         # sub-nodes of sim data resource
         loss_lst = []
@@ -334,12 +303,11 @@ class IntegratedViewDTI(Trainer):
                         # Adjust the learning rate.
                         # scheduler_gen.step()
                         # Training mode
-                        generator.train()
-                        discriminator.train()
+                        model.train()
                     else:
                         print("Validation...")
                         # Evaluation mode
-                        generator.eval()
+                        model.eval()
 
                     data_size = 0.
                     epoch_losses = []
@@ -365,8 +333,7 @@ class IntegratedViewDTI(Trainer):
                             Ys[view_name] = view_data[1]
                             Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
 
-                        optimizer_gen.zero_grad()
-                        optimizer_disc.zero_grad()
+                        optimizer.zero_grad()
 
                         # forward propagation
                         # track history if only in train
@@ -392,7 +359,7 @@ class IntegratedViewDTI(Trainer):
                             if use_prot:
                                 X.append(protein_x)
 
-                            outputs = generator(X)
+                            outputs = model(X)
                             target = torch.from_numpy(y).view(-1, 1).float()
                             valid = torch.ones_like(target).float()
                             fake = torch.zeros_like(target).float()
@@ -400,46 +367,25 @@ class IntegratedViewDTI(Trainer):
                                 target = target.cuda()
                                 valid = valid.cuda()
                                 fake = fake.cuda()
-                            pred_loss = prediction_criterion(outputs, target)
+                            loss = prediction_criterion(outputs, target)
 
                         if phase == "train":
-
-                            # GAN stuff
-                            f_xx, f_yy = torch.meshgrid(outputs.squeeze(), outputs.squeeze())
-                            predicted_diffs = torch.abs(f_xx - f_yy).sort(dim=1)[0][:, : neigh_dist]
-                            r_xx, r_yy = torch.meshgrid(target.squeeze(), target.squeeze())
-                            real_diffs = torch.abs(r_xx - r_yy).sort(dim=1)[0][:, :neigh_dist]
-
-                            # generator
-                            gen_loss = adversarial_loss(discriminator(predicted_diffs), valid)
-                            gen_loss_lst.append(gen_loss.item())
-                            loss = pred_loss + weighted_loss * gen_loss
+                            # backward pass
                             loss.backward()
-                            optimizer_gen.step()
-
-                            # discriminator
-                            true_loss = adversarial_loss(discriminator(real_diffs), valid)
-                            fake_loss = adversarial_loss(discriminator(predicted_diffs.detach()), fake)
-                            discriminator_loss = (true_loss + fake_loss) / 2.
-                            dis_loss_lst.append(discriminator_loss.item())
-                            discriminator_loss.backward()
-                            optimizer_disc.step()
+                            optimizer.step()
 
                             # for epoch stats
-                            epoch_losses.append(pred_loss.item())
+                            epoch_losses.append(loss.item())
 
                             # for sim data resource
-                            loss_lst.append(pred_loss.item())
+                            loss_lst.append(loss.item())
 
-                            print("\tEpoch={}/{}, batch={}/{}, pred_loss={:.4f}, D loss={:.4f}, G loss={:.4f}".format(
+                            print("\tEpoch={}/{}, batch={}/{}, pred_loss={:.4f}".format(
                                 epoch + 1, n_epochs,
                                 i + 1,
-                                len(data_loaders[phase]),
-                                pred_loss.item(),
-                                discriminator_loss,
-                                gen_loss))
+                                len(data_loaders[phase]), loss.item()))
                         else:
-                            if str(pred_loss.item()) != "nan":  # useful in hyperparameter search
+                            if str(loss.item()) != "nan":  # useful in hyperparameter search
                                 eval_dict = {}
                                 score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict["gconv"])
                                 # for epoch stats
@@ -464,13 +410,12 @@ class IntegratedViewDTI(Trainer):
 
                     if phase == "train":
                         print("\nPhase: {}, avg task pred_loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
-                        scheduler_disc.step()
-                        # scheduler_gen.step()
+                        scheduler.step()
                     else:
                         mean_score = np.mean(epoch_scores)
                         if best_score < mean_score:
                             best_score = mean_score
-                            best_model_wts = copy.deepcopy(generator.state_dict())
+                            best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
         except RuntimeError as e:
             print(str(e))
@@ -478,10 +423,10 @@ class IntegratedViewDTI(Trainer):
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
         try:
-            generator.load_state_dict(best_model_wts)
+            model.load_state_dict(best_model_wts)
         except RuntimeError as e:
             print(str(e))
-        return generator, best_score, best_epoch
+        return model, best_score, best_epoch
 
     @staticmethod
     def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
@@ -576,7 +521,7 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    view = "integrated_view_gan"
+    view = "integrated_view_no_gan"
     sim_label = "CUDA={}, view={}".format(cuda, view)
     print(sim_label)
 
@@ -714,20 +659,19 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer, transformers_dict, view,
                k=None):
     data = trainer.data_provider(k, flags, data_dict)
-    model, optimizer, data_loaders, \
-    metrics, weighted_loss, neigh_dist, prot_model_type = trainer.initialize(hparams=hyper_params,
-                                                                             train_dataset=data["train"],
-                                                                             val_dataset=data["val"],
-                                                                             test_dataset=data["test"])
+    model, optimizer, data_loaders, metrics, prot_model_type = trainer.initialize(hparams=hyper_params,
+                                                                                  train_dataset=data["train"],
+                                                                                  val_dataset=data["val"],
+                                                                                  test_dataset=data["test"])
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model[0], flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict, prot_desc_dict,
                                tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, weighted_loss,
-                                            neigh_dist, prot_model_type, transformers_dict, prot_desc_dict,
-                                            tasks, n_iters=10000, sim_data_node=sim_data_node)
+        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_type,
+                                            transformers_dict, prot_desc_dict, tasks, n_iters=10000,
+                                            sim_data_node=sim_data_node)
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
@@ -789,32 +733,22 @@ def default_hparams_bopt(flags):
     return {
         "attn_heads": (2,),
         "proj_out_dim": 1858,
-        "disc_hdims": [1250],
+        "lin_hdims": [128],
 
         # weight initialization
         "kaiming_constant": 5,
 
-        "weighted_loss": 0.39,
-
         # dropout
         "dprob": 0.3,
-        "disc_dprob": 0.3,
-
-        "neigh_dist": 14,
 
         "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
-        "optimizer_gen": "adagrad",
-        "optimizer_gen__global__weight_decay": 0.0037,
-        "optimizer_gen__global__lr": 0.00236,
-        # "optimizer_gen__adadelta__rho": 0.115873,
-        # "optimizer_gen__adagrad__lr_decay": 0.000496165,
-        "optimizer_disc": "adamax",
-        "optimizer_disc__global__weight_decay": 0.0057,
-        "optimizer_disc__global__lr": 0.00017,
+        "optimizer": "adagrad",
+        "optimizer__global__weight_decay": 0.0037,
+        "optimizer__global__lr": 0.00236,
 
         "prot": {
             "model_type": "Identity",
@@ -840,33 +774,24 @@ def default_hparams_bopt(flags):
 def get_hparam_config(flags):
     return {
         "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
-        "attn_heads": DiscreteParam(min=1, max=3, size=DiscreteParam(min=1, max=3)),
+        "attn_heads": DiscreteParam(min=1, max=4, size=DiscreteParam(min=1, max=4)),
         "proj_out_dim": DiscreteParam(min=512, max=2048),
-        "disc_hdims": DiscreteParam(min=128, max=2048, size=DiscreteParam(min=1, max=2)),
+        "lin_hdims": DiscreteParam(min=64, max=1024, size=DiscreteParam(min=1, max=2)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
 
-        "weighted_loss": RealParam(min=0.1, max=0.5),
-
         # dropout
         "dprob": RealParam(0.1, max=0.5),
-        # "disc_dprob": RealParam(0.1),
-
-        "neigh_dist": DiscreteParam(min=1, max=20),
 
         "tr_batch_size": CategoricalParam(choices=[64, 128, 256]),
         "val_batch_size": ConstantParam(128),
         "test_batch_size": ConstantParam(128),
 
         # optimizer params
-        "optimizer_gen": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
-        "optimizer_gen__global__weight_decay": LogRealParam(),
-        "optimizer_gen__global__lr": LogRealParam(),
-        # "optimizer_gen__adagrad__lr_decay": LogRealParam(),
-        "optimizer_disc": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
-        "optimizer_disc__global__weight_decay": LogRealParam(),
-        "optimizer_disc__global__lr": LogRealParam(),
+        "optimizer": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
+        "optimizer__global__weight_decay": LogRealParam(),
+        "optimizer__global__lr": LogRealParam(),
 
         "prot": DictParam({
             "model_type": ConstantParam("Identity"),
