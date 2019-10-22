@@ -29,13 +29,12 @@ from tqdm import tqdm
 
 from ivpgan import cuda
 from ivpgan.data import Dataset
-from ivpgan.nn.layers import Flatten, ConcatLayer
-from ivpgan.nn.models import NonsatActivation, create_fcn_layers, NwayForward, DINA, Projector
+from ivpgan.nn.models import TwoWayAttention, TwoWayForward
 from ivpgan.utils import Trainer
+from ivpgan.utils.io import save_model, load_model
 from ivpgan.utils.math import ExpAverage
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.train_helpers import load_data, split_mnist, trim_mnist, count_parameters, GradStats
-from ivpgan.utils.io import save_model, load_model
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -68,15 +67,11 @@ class MnistPoc(Trainer):
             base_shape = get_out_shape(net, hparams["views_in_shape"][i])
             l_dims.append(base_shape[-1])
             vws_lst.append(net)
-        max_dim = max(l_dims)
-        model = nn.Sequential(NwayForward(vws_lst),
-                              DINA(heads=hparams["attn_heads"]),
-                              DINA(heads=hparams["attn_heads"]),
-                              Projector(in_features=max_dim * hparams["attn_heads"],
-                                        out_features=hparams["dina_out_dim"],
-                                        pool=hparams["proj_pool_func"]),
+        out_dim = sum(l_dims)
+        model = nn.Sequential(TwoWayForward(*vws_lst),
+                              TwoWayAttention(),
                               nn.Dropout(hparams["dprob"]),
-                              nn.Linear(hparams["dina_out_dim"], 10))
+                              nn.Linear(2 * 780, 10))
 
         if cuda:
             model = model.cuda()

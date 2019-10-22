@@ -43,14 +43,14 @@ from ivpgan.utils.train_helpers import count_parameters, load_pickle
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [7, 14, 21]
+seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 use_ecfp8 = True
-use_weave = False
+use_weave = True
 use_gconv = True
 use_prot = True
 
@@ -79,7 +79,8 @@ def create_weave_net(hparams):
     weave_args = (
         WeaveLayerArgs(n_atom_input_feat=75,
                        n_pair_input_feat=14,
-                       n_atom_output_feat=50,
+                       # n_atom_output_feat=50,
+                       n_atom_output_feat=hparams["weave"]["dim"],
                        n_pair_output_feat=50,
                        n_hidden_AA=50,
                        n_hidden_PA=50,
@@ -90,36 +91,37 @@ def create_weave_net(hparams):
                        batch_norm=True,
                        dropout=hparams["dprob"]
                        ),
-        WeaveLayerArgs(n_atom_input_feat=50,
-                       n_pair_input_feat=14,
-                       n_atom_output_feat=hparams["weave"]["dim"],
-                       n_pair_output_feat=50,
-                       n_hidden_AA=50,
-                       n_hidden_PA=50,
-                       n_hidden_AP=50,
-                       n_hidden_PP=50,
-                       update_pair=hparams["weave"]["update_pairs"],
-                       batch_norm=True,
-                       dropout=hparams["dprob"],
-                       activation='relu'),
+        # WeaveLayerArgs(n_atom_input_feat=50,
+        #                n_pair_input_feat=14,
+        #                n_atom_output_feat=hparams["weave"]["dim"],
+        #                n_pair_output_feat=50,
+        #                n_hidden_AA=50,
+        #                n_hidden_PA=50,
+        #                n_hidden_AP=50,
+        #                n_hidden_PP=50,
+        #                update_pair=hparams["weave"]["update_pairs"],
+        #                batch_norm=True,
+        #                dropout=hparams["dprob"],
+        #                activation='relu'),
     )
-    wg_args = WeaveGatherArgs(conv_out_depth=50, gaussian_expand=True, n_depth=128)
+    wg_args = WeaveGatherArgs(conv_out_depth=hparams["weave"]["dim"], gaussian_expand=True, n_depth=128)
     weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='2D')
     model = nn.Sequential(weave_model)
     return model
 
 
 def create_gconv_net(hparams):
-    gconv_model = GraphConvSequential(GraphConvLayer(in_dim=75, out_dim=64),
-                                      nn.BatchNorm1d(64),
-                                      nn.ReLU(),
-                                      GraphPool(),
-
-                                      GraphConvLayer(in_dim=64, out_dim=hparams["gconv"]["dim"]),
+    gconv_model = GraphConvSequential(GraphConvLayer(in_dim=75, out_dim=hparams["gconv"]["dim"]),
                                       nn.BatchNorm1d(hparams["gconv"]["dim"]),
                                       nn.ReLU(),
                                       GraphPool(),
                                       GraphGather2D(activation="relu"))
+
+    # GraphConvLayer(in_dim=64, out_dim=hparams["gconv"]["dim"]),
+    # nn.BatchNorm1d(hparams["gconv"]["dim"]),
+    # nn.ReLU(),
+    # GraphPool(),
+    # GraphGather2D(activation="relu"))
 
     model = nn.Sequential(gconv_model)
     return model
@@ -128,6 +130,7 @@ def create_gconv_net(hparams):
 def create_integrated_net(hparams):
     # N-way forward propagation
     views = {}
+
     if use_ecfp8:
         views["ecfp8"] = create_ecfp_net(hparams)
     if use_weave:
@@ -138,14 +141,15 @@ def create_integrated_net(hparams):
         views["prot"] = create_prot_net(hparams)
 
     layers = [NwayForward(models=views.values())]
+
+    max_dim = max([hparams[c]["dim"] for c in views.keys()])
+
     # MH-DINA layers
     for h in hparams["attn_heads"]:
-        layers.append(DINA(heads=h))
-
-    dim = max([hparams[c]["dim"] for c in views.keys()])
+        layers.append(DINA(heads=h, total_dim=len(views) * max_dim))
 
     # Projection to unified space
-    layers.append(Projector(in_features=dim * len(views), out_features=hparams["proj_out_dim"],
+    layers.append(Projector(in_features=max_dim * hparams["attn_heads"][-1], out_features=hparams["proj_out_dim"],
                             batch_norm=True, activation="relu", pool="avg"))
     layers.append(nn.Dropout(hparams["dprob"]))
 
@@ -273,7 +277,7 @@ class IntegratedViewDTI(Trainer):
         n_epochs = n_iters // len(data_loaders["train"])
 
         # learning rate decay schedulers
-        scheduler = sch.StepLR(optimizer, step_size=30, gamma=0.01)
+        scheduler = sch.StepLR(optimizer, step_size=10, gamma=0.01)
 
         # pred_loss functions
         prediction_criterion = nn.MSELoss()
@@ -285,14 +289,12 @@ class IntegratedViewDTI(Trainer):
         metrics_node = DataNode(label="validation_metrics", data=metrics_dict)
         scores_lst = []
         scores_node = DataNode(label="validation_score", data=scores_lst)
-        gen_loss_lst = []
-        gen_loss_node = DataNode(label="generator_loss", data=gen_loss_lst)
-        dis_loss_lst = []
-        dis_loss_node = DataNode(label="discriminator_loss", data=dis_loss_lst)
+        loss_lst = []
+        loss_node = DataNode(label="generator_loss", data=loss_lst)
 
         # add sim data nodes to parent node
         if sim_data_node:
-            sim_data_node.data = [train_loss_node, metrics_node, scores_node, gen_loss_node, dis_loss_node]
+            sim_data_node.data = [train_loss_node, metrics_node, scores_node, loss_node]
 
         try:
             # Main training loop
@@ -326,7 +328,7 @@ class IntegratedViewDTI(Trainer):
                         for view_name in data:
                             view_data = data[view_name]
                             if view_name == "gconv":
-                                x = ((view_data[0][0], batch_size), view_data[0][1])
+                                x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
                                 Xs["gconv"] = x
                             else:
                                 Xs[view_name] = view_data[0]
@@ -343,8 +345,8 @@ class IntegratedViewDTI(Trainer):
                             for j in range(1, len(Ys.values())):
                                 assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
 
-                            y = Ys["gconv"]
-                            w = Ws["gconv"]
+                            y = Ys[list(Xs.keys())[0]]
+                            w = Ws[list(Xs.keys())[0]]
                             if prot_model_type == "embedding":
                                 protein_x = Xs[list(Xs.keys())[0]][2]
                             else:
@@ -387,7 +389,8 @@ class IntegratedViewDTI(Trainer):
                         else:
                             if str(loss.item()) != "nan":  # useful in hyperparameter search
                                 eval_dict = {}
-                                score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict["gconv"])
+                                score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
+                                                transformers_dict[list(Xs.keys())[0]])
                                 # for epoch stats
                                 epoch_scores.append(score)
 
@@ -623,20 +626,20 @@ def main(flags):
                                                data_node=data_node,
                                                split_label=split_label,
                                                sim_label=view,
-                                               minimizer="gbrt",
+                                               minimizer="gp",
                                                dataset_label=dataset_lbl,
                                                results_file="{}_{}_dti_dina_{}.csv".format(flags["hparam_search_alg"],
                                                                                            view,
                                                                                            date_label))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=10, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
 
     # save simulation data resource tree to file.
-    sim_data.to_json(path="./analysis/")
+    # sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view):
@@ -731,29 +734,29 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
-        "attn_heads": (2,),
-        "proj_out_dim": 1858,
-        "lin_hdims": [128],
+        "attn_heads": [2, 1, 1],
+        "proj_out_dim": 1634,
+        "lin_hdims": [81],
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout
-        "dprob": 0.3,
+        "dprob": 0.4120111047648317,
 
-        "tr_batch_size": 256,
+        "tr_batch_size": 128,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "adagrad",
-        "optimizer__global__weight_decay": 0.0037,
-        "optimizer__global__lr": 0.00236,
+        "optimizer__global__weight_decay": 0.0037022869206988418,
+        "optimizer__global__lr": 0.002358913764815064,
 
         "prot": {
             "model_type": "Identity",
             "in_dim": 8421,
-            "dim": 736,
+            "dim": 239,
             "vocab_size": flags["prot_vocab_size"],
             "protein_profile": flags["protein_profile"],
             "hidden_dim": 128,
@@ -763,7 +766,7 @@ def default_hparams_bopt(flags):
             "update_pairs": False,
         },
         "gconv": {
-            "dim": 256,
+            "dim": 128,
         },
         "ecfp8": {
             "dim": 1024,
@@ -776,7 +779,7 @@ def get_hparam_config(flags):
         "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
         "attn_heads": DiscreteParam(min=1, max=4, size=DiscreteParam(min=1, max=4)),
         "proj_out_dim": DiscreteParam(min=512, max=2048),
-        "lin_hdims": DiscreteParam(min=64, max=1024, size=DiscreteParam(min=1, max=2)),
+        "lin_hdims": DiscreteParam(min=64, max=1024, size=DiscreteParam(min=1, max=3)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
@@ -789,21 +792,21 @@ def get_hparam_config(flags):
         "test_batch_size": ConstantParam(128),
 
         # optimizer params
-        "optimizer": CategoricalParam(choices=["adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
+        "optimizer": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer__global__weight_decay": LogRealParam(),
         "optimizer__global__lr": LogRealParam(),
 
         "prot": DictParam({
             "model_type": ConstantParam("Identity"),
             "in_dim": ConstantParam(8421),
-            "dim": DiscreteParam(min=128, max=2048),
+            "dim": DiscreteParam(min=128, max=1024),
         }),
         "weave": DictParam({
-            "dim": ConstantParam(128),  # CategoricalParam([128, 256, 512]),
+            "dim": DiscreteParam(min=64, max=512),
             "update_pairs": ConstantParam(False),
         }),
         "gconv": DictParam({
-            "dim": CategoricalParam([128, 256, 512]),
+            "dim": DiscreteParam(min=64, max=512),
         }),
         "ecfp8": DictParam({
             "dim": ConstantParam(1024),

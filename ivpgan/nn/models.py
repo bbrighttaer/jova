@@ -308,7 +308,8 @@ class GraphConvSequential(nn.Sequential):
         input = list(input)
         for module in self._modules.values():
             if isinstance(module, nn.BatchNorm1d) or isinstance(module, nn.Dropout) \
-                    or isinstance(module, nn.Linear) or isinstance(module, nn.ReLU):
+                    or isinstance(module, nn.Linear) or isinstance(module, nn.ReLU) \
+                    or isinstance(module, NonsatActivation):
                 input[0] = module(input[0])
             elif isinstance(module, GraphGather):
                 input[0] = module(input, batch_size)
@@ -379,12 +380,14 @@ def nonsat_activation(x, ep=1e-4, max_iter=100):
 
 class DINA(nn.Module):
 
-    def __init__(self, activation=torch.relu, heads=1, bias=True):
+    def __init__(self, total_dim, activation=nonsat_activation, heads=1, bias=True):
         super(DINA, self).__init__()
         self.heads = heads
         self.add_bias = bias
         self.batch_norm_2d = nn.BatchNorm2d(1)
-        self.register_parameter('U', None)
+        # self.register_parameter('U', None)
+        self.U = nn.Parameter(torch.empty((self.heads, total_dim, total_dim)))
+        init.xavier_normal_(self.U)
         self.activation = activation
         self._mask_mul = None
         self._mask_add = None
@@ -419,9 +422,9 @@ class DINA(nn.Module):
         contexts = self._pad_tensors(c, contexts)
 
         # initialize trainable parameter
-        if self.U is None:
-            self.U = nn.Parameter(torch.empty((self.heads, c, c)).to(device))
-            init.xavier_normal_(self.U)
+        # if self.U is None:
+        #     self.U = nn.Parameter(torch.empty((self.heads, c, c)).to(device))
+        #     init.xavier_normal_(self.U)
 
         # padding
         h_reps = []
@@ -448,23 +451,20 @@ class DINA(nn.Module):
             cols, _ = torch.max(K_hat, dim=1)
             rows, _ = torch.max(K_hat, dim=2)
             alpha = rows + cols
+            alpha = alpha.view(alpha.shape[0], 1, -1)
 
             # attention
             reps = []
             offset = 0
             for i, context in enumerate(contexts):
                 C = context
-                a = alpha[:, offset: offset + L[i]]
+                a = alpha[:, :, offset: offset + L[i]]
                 offset += L[i]
-                wt = torch.softmax(a, dim=1)
-                wt = wt.unsqueeze(dim=1)
-                r = wt.bmm(C).squeeze()
-                reps.append(r)
-            h_reps.append(reps)
-        c_hat = []
-        for i in range(len(contexts)):
-            c_hat.append(torch.stack([c_lst[i] for c_lst in h_reps], dim=0).permute(1, 0, 2))
-        return c_hat
+                wt = torch.softmax(a, dim=2)
+                r = wt.bmm(C)
+                reps.append(r.view(r.shape[0], -1))
+            h_reps.append(torch.stack(reps, dim=1))
+        return h_reps
 
     @classmethod
     def _diag_sub_mat_mask(cls, dim, sizes, dvc, off_diag_fill_func=torch.ones, diag_fill_val=-999):
@@ -514,21 +514,22 @@ class Projector(nn.Module):
             The representations resulting from the projection. shape: [batch_size, len(inputs)*latent_dimension]
         """
         # pooling
-        pooled = []
-        for C in inputs:
-            if self.pool == 'max':
-                p, _ = torch.max(C, dim=1)
-            else:
-                p = torch.mean(C, dim=1)
-            pooled.append(p)
+        tensor = torch.stack(inputs, dim=1)
+        # pooled = []
+        # for C in inputs:
+        if self.pool == 'max':
+            pooled, _ = torch.max(tensor, dim=1)
+        else:
+            pooled = torch.mean(tensor, dim=1)
+            # pooled.append(p.view(C.shape[0], -1))
 
         # projection
-        X = torch.cat(pooled, dim=1)
-        X = self.linear(X)
+        x = pooled.view(pooled.shape[0], -1)
+        x = self.linear(x)
         if self.batch_norm:
-            X = self.bn(X)
-        X = self.activation(X)
-        return X
+            x = self.bn(x)
+        x = self.activation(x)
+        return x
 
 
 class ProteinFeatLearning(nn.Module):
@@ -568,3 +569,146 @@ class ProteinFeatLearning(nn.Module):
         output, _ = self.model(embeds, (h0, c0))
         output = self.activation(output)
         return output
+
+
+class Prot2Vec(nn.Module):
+
+    def __init__(self, protein_profile, vocab_size, embedding_dim, activation='relu'):
+        super(Prot2Vec, self).__init__()
+        self.protein_profile = protein_profile
+        self.activation = get_activation_func(activation)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+
+    def forward(self, input):
+        # retrieve protein embedding profiles
+        x = [self.protein_profile[prot[1]].tolist() for prot in input]
+
+        # pad sequences
+        max_seq = max([len(p) for p in x])
+        x = [vec + [0] * (max_seq - len(vec)) for vec in x]
+        x = torch.tensor(x, dtype=torch.long).to(self.embedding.weight.device)
+
+        # get protein embeddings
+        embeddings = self.embedding(x)
+        embeddings = self.activation(embeddings)
+        return embeddings
+
+
+class TwoWayForward(nn.Module):
+
+    def __init__(self, model1, model2):
+        super(TwoWayForward, self).__init__()
+        self.models = nn.ModuleList([model1, model2])
+
+    def forward(self, inputs):
+        outs = []
+        for i, model in enumerate(self.models):
+            outs.append(model(inputs[i]))
+        return outs
+
+
+class TwoWayAttention(nn.Module):
+
+    def __init__(self, dim1, dim2, activation=nonsat_activation):
+        super(TwoWayAttention, self).__init__()
+        self.register_parameter('U', None)
+        self.activation = activation
+        self.U = nn.Parameter(torch.empty((dim1, dim2)))
+        init.xavier_normal_(self.U)
+
+    def forward(self, inputs):
+        x1, x2 = inputs
+        x1_dim = x1.shape[-1]
+        x2_dim = x2.shape[-1]
+
+        # initialize trainable parameter
+        # if self.U is None:
+        #     self.U = nn.Parameter(torch.empty((x1_dim, x2_dim)).to(x1.device))
+        #     init.xavier_normal_(self.U)
+
+        batch_sz = x1.shape[0]
+        U = self.U.repeat(batch_sz, 1, 1)
+        M = x1.bmm(U).bmm(x2.permute(0, 2, 1))
+        rows, _ = torch.max(M, dim=2, keepdim=True)
+        rows = rows.view(batch_sz, 1, -1)
+        rows = torch.softmax(rows, dim=2)
+        cols, _ = torch.max(M, dim=1, keepdim=True)
+        cols = cols.view(batch_sz, 1, -1)
+        cols = torch.softmax(cols, dim=2)
+        x1 = rows.bmm(x1).squeeze()
+        x2 = cols.bmm(x2).squeeze()
+        x = torch.cat([x1, x2], dim=1)
+        x = self.activation(x)
+        return x
+
+
+class JointAttention(nn.Module):
+
+    def __init__(self, num_segments, d_dims, latent_dim=256, activation=nonsat_activation):
+        super(JointAttention, self).__init__()
+        self.activation = activation
+        self.num_segments = num_segments
+        self.d_dims = d_dims
+        self.modules_lst = nn.ModuleList([nn.ModuleList((nn.Linear(in_features=in_dim, out_features=latent_dim),
+                                                         nn.Conv1d(segs, 1, 1, 1)))
+                                          for segs, in_dim in zip(num_segments, d_dims)])
+        self.register_parameter('W', None)
+        self.register_parameter('b', None)
+
+    @classmethod
+    def _pad_tensors(cls, c, contexts):
+        padded = []
+        for X in contexts:
+            mask = F.pad(torch.ones_like(X), (0, c - X.shape[-1])).bool()
+            X_padded = torch.zeros(mask.shape).to(X.device)
+            X_padded = X_padded.masked_scatter(mask, X)
+            padded.append(X_padded)
+        return padded
+
+    def forward(self, inputs):
+        """
+                Applies a Direction-Invariant N-way Attention to the given contexts.
+
+                :param contexts: tuple
+                    The N contexts for computing the attention vectors.
+                    Each element's shape must be (batch_size, l, d)
+                :return: tuple
+                    attention vectors.
+                """
+        # L = [c.shape[1] for c in inputs]
+        # c = max([m.shape[-1] for m in inputs])
+        # scaling = c ** -0.5
+        # device = inputs[0].device
+        #
+        # # pad where necessary
+        # contexts = self._pad_tensors(c, inputs)
+        #
+        # # padding
+        # M = torch.cat(contexts, dim=1).to(device)
+        # M = M * scaling
+        #
+        # # initialize trainable parameter
+        # if self.W is None:
+        #     self.W = nn.Parameter(torch.empty((c, 1)).to(inputs[0].device))
+        #     init.xavier_normal_(self.W)
+        #     self.b = nn.Parameter(torch.empty((1, 1)).to(inputs[0].device))
+        #     # init.constant_(self.b, 0)
+        #     fan_in, _ = init._calculate_fan_in_and_fan_out(self.W)
+        #     bound = 1 / math.sqrt(fan_in)
+        #     init.uniform_(self.b, -bound, bound)
+        #
+        # W = self.W.repeat(M.shape[0], 1, 1)
+        # b = self.b.repeat(M.shape[0], 1, 1)
+        # x = M.bmm(W) + b
+        # xs = torch.split(x, L, dim=1)
+        # weighted = []
+        # for a, C in zip(xs, inputs):
+        #     a = torch.softmax(a.permute(0, 2, 1), dim=2)
+        #     C = a.bmm(C)
+        #     weighted.append(C.squeeze())
+        # x = torch.cat(weighted, dim=1)
+        # x = self.activation(x)
+        xs = [self.activation(linear(conv(x).view(x.shape[0], -1))) for (linear, conv), x in
+              zip(self.modules_lst, inputs)]
+        x = torch.cat(xs, dim=1)
+        return x
