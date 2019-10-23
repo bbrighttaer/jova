@@ -46,6 +46,10 @@ if __name__ == '__main__':
     parser.add_argument('--verbose',
                         action='store_true',
                         help='Prints every entry being processed')
+    parser.add_argument('--ds_folder',
+                        type=str,
+                        dest='dataset',
+                        help='Dataset folder to store the files')
     args = parser.parse_args()
 
     word_dict = defaultdict(lambda: len(word_dict))
@@ -63,6 +67,6 @@ if __name__ == '__main__':
             proteins[label] = protein_profile
 
     print("Saving files...")
-    dump_dictionary(proteins, '../../data/proteins.profile')
-    dump_dictionary(word_dict, '../../data/proteins.vocab')
+    dump_dictionary(proteins, '../../data/{}/proteins.profile'.format(args.dataset))
+    dump_dictionary(word_dict, '../../data/{}/proteins.vocab'.format(args.dataset))
     print("Info: vocab size={}, protein profiles saved={}".format(len(word_dict), len(proteins)))

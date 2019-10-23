@@ -160,7 +160,7 @@ class Dataset(ds.Dataset):
         return ret_ds
 
 
-def batch_collator(batch, prot_desc_dict, spec):
+def batch_collator(batch, prot_desc_dict, spec, cuda_prot=True):
     batch = np.array(batch)  # batch.shape structure: (batch_size, x-0/y-1/w-2 data, view index)
     data = {}
     # num_active_views = reduce(lambda x1, x2: x1 + x2, flags.values())
@@ -179,11 +179,11 @@ def batch_collator(batch, prot_desc_dict, spec):
         active_views.append(spec)
     for i, v_name in enumerate(active_views):
         func = funcs[v_name]
-        data[v_name] = (func(batch, prot_desc_dict, i), batch[:, 1, i], batch[:, 2, i])
+        data[v_name] = (func(batch, prot_desc_dict, i, cuda_prot), batch[:, 1, i], batch[:, 2, i])
     return len(batch), data
 
 
-def process_ecfp_view_data(X, prot_desc_dict, idx):
+def process_ecfp_view_data(X, prot_desc_dict, idx, cuda_prot):
     """
     Converts ECFP-Protein pair dataset to a pytorch tensor.
 
@@ -203,10 +203,10 @@ def process_ecfp_view_data(X, prot_desc_dict, idx):
         prot_desc = np.array(prot_desc)
         prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
         prots_tensor = torch.from_numpy(prot_desc)
-    return cuda(mols_tensor.float()), cuda(prots_tensor.float()), prot_names
+    return cuda(mols_tensor.float()), cuda(prots_tensor.float()) if cuda_prot else prots_tensor.float(), prot_names
 
 
-def process_weave_view_data(X, prot_desc_dict, idx):
+def process_weave_view_data(X, prot_desc_dict, idx, cuda_prot):
     """
     Converts Weave-Protein pair dataset to a pytorch tensor.
 
@@ -258,12 +258,12 @@ def process_weave_view_data(X, prot_desc_dict, idx):
         cuda(torch.tensor(np.array(pair_split), dtype=torch.int)),
         cuda(torch.tensor(np.concatenate(atom_to_pair, axis=0), dtype=torch.long)),
         cuda(torch.tensor(np.array(atom_split), dtype=torch.int)),
-        cuda(torch.tensor(n_atoms_list, dtype=torch.long))
+        n_atoms_list
     ]
-    return mol_data, cuda(prots_tensor.float()), prot_names
+    return mol_data, cuda(prots_tensor.float()) if cuda_prot else prots_tensor.float(), prot_names
 
 
-def process_gconv_view_data(X, prot_desc_dict, idx):
+def process_gconv_view_data(X, prot_desc_dict, idx, cuda_prot):
     """
     Converts Graph convolution-Protein pair dataset to a pytorch tensor.
 
@@ -285,7 +285,7 @@ def process_gconv_view_data(X, prot_desc_dict, idx):
     mol_data.append(cuda(torch.from_numpy(multiConvMol.get_atom_features())))
     mol_data.append(cuda(torch.from_numpy(multiConvMol.deg_slice)))
     mol_data.append(cuda(torch.tensor(multiConvMol.membership)))
-    mol_data.append(cuda(torch.tensor(n_atoms_list, dtype=torch.long)))
+    mol_data.append(n_atoms_list)
     for i in range(1, len(multiConvMol.get_deg_adjacency_lists())):
         mol_data.append(cuda(torch.from_numpy(multiConvMol.get_deg_adjacency_lists()[i])))
 
@@ -295,7 +295,7 @@ def process_gconv_view_data(X, prot_desc_dict, idx):
     prot_desc = [prot_desc_dict[prot_name] for prot_name in prot_names]
     prot_desc = np.array(prot_desc)
     prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
-    prots_tensor = cuda(torch.from_numpy(prot_desc))
+    prots_tensor = cuda(torch.from_numpy(prot_desc)) if cuda_prot else torch.from_numpy(prot_desc)
 
     batch_size = len(x_data)
     return mol_data, prots_tensor.float(), prot_names

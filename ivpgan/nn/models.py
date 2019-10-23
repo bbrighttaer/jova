@@ -644,16 +644,16 @@ class TwoWayAttention(nn.Module):
 
 class JointAttention(nn.Module):
 
-    def __init__(self, num_segments, d_dims, latent_dim=256, activation=nonsat_activation):
+    def __init__(self, d_dims, latent_dim=256, num_heads=1, num_layers=1, dprob=0., activation='relu'):
         super(JointAttention, self).__init__()
-        self.activation = activation
-        self.num_segments = num_segments
-        self.d_dims = d_dims
-        self.modules_lst = nn.ModuleList([nn.ModuleList((nn.Linear(in_features=in_dim, out_features=latent_dim),
-                                                         nn.Conv1d(segs, 1, 1, 1)))
-                                          for segs, in_dim in zip(num_segments, d_dims)])
-        self.register_parameter('W', None)
-        self.register_parameter('b', None)
+        self.latent_dim = latent_dim
+        self.lin_prjs = nn.ModuleList([nn.Linear(in_dim, latent_dim) for in_dim in d_dims])
+        self.attention_models = nn.ModuleList([nn.MultiheadAttention(embed_dim=self.latent_dim,
+                                                                     num_heads=num_heads, dropout=dprob)
+                                               for _ in range(num_layers)])
+        self.activation = get_activation_func(activation)
+        self.dropout = nn.Dropout(dprob)
+        self.batch_norm = nn.BatchNorm1d(latent_dim * len(d_dims))
 
     @classmethod
     def _pad_tensors(cls, c, contexts):
@@ -671,44 +671,32 @@ class JointAttention(nn.Module):
 
                 :param contexts: tuple
                     The N contexts for computing the attention vectors.
-                    Each element's shape must be (batch_size, l, d)
+                    Each element's shape must be (number of segments, batch size, model dimension)
                 :return: tuple
                     attention vectors.
                 """
-        # L = [c.shape[1] for c in inputs]
-        # c = max([m.shape[-1] for m in inputs])
-        # scaling = c ** -0.5
-        # device = inputs[0].device
-        #
-        # # pad where necessary
-        # contexts = self._pad_tensors(c, inputs)
-        #
-        # # padding
-        # M = torch.cat(contexts, dim=1).to(device)
-        # M = M * scaling
-        #
-        # # initialize trainable parameter
-        # if self.W is None:
-        #     self.W = nn.Parameter(torch.empty((c, 1)).to(inputs[0].device))
-        #     init.xavier_normal_(self.W)
-        #     self.b = nn.Parameter(torch.empty((1, 1)).to(inputs[0].device))
-        #     # init.constant_(self.b, 0)
-        #     fan_in, _ = init._calculate_fan_in_and_fan_out(self.W)
-        #     bound = 1 / math.sqrt(fan_in)
-        #     init.uniform_(self.b, -bound, bound)
-        #
-        # W = self.W.repeat(M.shape[0], 1, 1)
-        # b = self.b.repeat(M.shape[0], 1, 1)
-        # x = M.bmm(W) + b
-        # xs = torch.split(x, L, dim=1)
-        # weighted = []
-        # for a, C in zip(xs, inputs):
-        #     a = torch.softmax(a.permute(0, 2, 1), dim=2)
-        #     C = a.bmm(C)
-        #     weighted.append(C.squeeze())
-        # x = torch.cat(weighted, dim=1)
-        # x = self.activation(x)
-        xs = [self.activation(linear(conv(x).view(x.shape[0], -1))) for (linear, conv), x in
-              zip(self.modules_lst, inputs)]
-        x = torch.cat(xs, dim=1)
+        # Gets number of segments in each view
+        num_segs = [x.shape[0] for x in inputs]
+
+        # projection of segments into low dimensional space
+        xs = [(self.lin_prjs[i](x.view(-1, x.shape[-1]))).view(*x.shape[:2], -1) for i, x in enumerate(inputs)]
+
+        # join all segments along the 'seq' dimension
+        x = torch.cat(xs)
+
+        # self-attention
+        wts_lst = []
+        for attn_net in self.attention_models:
+            # self-attention
+            x, wts = attn_net(x, x, x)
+            x = self.activation(x)
+            wts_lst.append(wts)
+
+        # compute view representations
+        xs = torch.split(x, num_segs, 0)
+        xs = [torch.sum(x, 0) for x in xs]
+
+        # concat view reps
+        x = torch.cat(xs, 1)
+        x = self.dropout(self.activation(self.batch_norm(x)))
         return x

@@ -32,14 +32,14 @@ from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
 from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
+from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D, GraphGather
 from ivpgan.nn.models import GraphConvSequential, create_fcn_layers, WeaveModel, NwayForward, DINA, Projector, \
     ProteinFeatLearning, JointAttention, NonsatActivation, Prot2Vec
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.math import ExpAverage
 from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters, load_pickle
+from ivpgan.utils.train_helpers import count_parameters, load_pickle, GradStats
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -50,33 +50,35 @@ check_data = False
 
 torch.cuda.set_device(0)
 
-use_ecfp8 = False
+use_ecfp8 = True
 use_weave = False
 use_gconv = True
 use_prot = True
 
 
 def create_ecfp_net(hparams):
-    model = nn.Sequential(Unsqueeze(dim=2))
+    model = nn.Sequential(Unsqueeze(dim=0))
     return model
 
 
 def create_prot_net(hparams):
     if hparams["prot"]["model_type"].lower() == "rnn":
-        model = ProteinFeatLearning(protein_profile=hparams["prot"]["protein_profile"],
-                                    vocab_size=hparams["prot"]["vocab_size"],
-                                    embedding_dim=hparams["prot"]["dim"],
-                                    hidden_dim=hparams["prot"]["hidden_dim"],
-                                    dropout=hparams["dprob"])
+        pass
+        # model = ProteinFeatLearning(protein_profile=hparams["prot"]["protein_profile"],
+        #                             vocab_size=hparams["prot"]["vocab_size"],
+        #                             embedding_dim=hparams["prot"]["dim"],
+        #                             hidden_dim=hparams["prot"]["hidden_dim"],
+        #                             dropout=hparams["dprob"])
     elif hparams["prot"]["model_type"].lower() == "embeddings":
         model = Prot2Vec(protein_profile=hparams["prot"]["protein_profile"],
                          vocab_size=hparams["prot"]["vocab_size"],
                          embedding_dim=hparams["prot"]["dim"])
     else:
-        model = nn.Sequential(nn.Linear(hparams["prot"]["in_dim"], hparams["prot"]["dim"]),
-                              nn.BatchNorm1d(hparams["prot"]["dim"]),
-                              NonsatActivation(),
-                              Unsqueeze(dim=1))
+        # model = nn.Sequential(nn.Linear(hparams["prot"]["in_dim"], hparams["prot"]["dim"]),
+        #                       nn.BatchNorm1d(hparams["prot"]["dim"]),
+        #                       NonsatActivation(),
+        #                       Unsqueeze(dim=1))
+        model = nn.Sequential(Unsqueeze(dim=0))
     return model
 
 
@@ -84,8 +86,8 @@ def create_weave_net(hparams):
     weave_args = (
         WeaveLayerArgs(n_atom_input_feat=75,
                        n_pair_input_feat=14,
-                       # n_atom_output_feat=50,
-                       n_atom_output_feat=hparams["weave"]["dim"],
+                       n_atom_output_feat=50,
+                       # n_atom_output_feat=hparams["weave"]["dim"],
                        n_pair_output_feat=50,
                        n_hidden_AA=50,
                        n_hidden_PA=50,
@@ -96,38 +98,43 @@ def create_weave_net(hparams):
                        batch_norm=True,
                        dropout=hparams["dprob"]
                        ),
-        # WeaveLayerArgs(n_atom_input_feat=50,
-        #                n_pair_input_feat=14,
-        #                n_atom_output_feat=hparams["weave"]["dim"],
-        #                n_pair_output_feat=50,
-        #                n_hidden_AA=50,
-        #                n_hidden_PA=50,
-        #                n_hidden_AP=50,
-        #                n_hidden_PP=50,
-        #                update_pair=hparams["weave"]["update_pairs"],
-        #                batch_norm=True,
-        #                dropout=hparams["dprob"],
-        #                activation='relu'),
+        WeaveLayerArgs(n_atom_input_feat=50,
+                       n_pair_input_feat=14,
+                       n_atom_output_feat=hparams["weave"]["dim"],
+                       n_pair_output_feat=50,
+                       n_hidden_AA=50,
+                       n_hidden_PA=50,
+                       n_hidden_AP=50,
+                       n_hidden_PP=50,
+                       update_pair=hparams["weave"]["update_pairs"],
+                       batch_norm=True,
+                       dropout=hparams["dprob"],
+                       activation='relu'),
     )
     wg_args = WeaveGatherArgs(conv_out_depth=hparams["weave"]["dim"], gaussian_expand=True,
                               n_depth=hparams["weave"]["dim"])
-    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='2D')
+    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='1D')
     model = nn.Sequential(weave_model)
     return model
 
 
 def create_gconv_net(hparams):
-    gconv_model = GraphConvSequential(GraphConvLayer(in_dim=75, out_dim=hparams["gconv"]["dim"]),
-                                      nn.BatchNorm1d(hparams["gconv"]["dim"]),
-                                      NonsatActivation(),
+    dim = hparams["gconv"]["dim"]
+    gconv_model = GraphConvSequential(GraphConvLayer(in_dim=75, out_dim=64),
+                                      nn.BatchNorm1d(64),
+                                      nn.ReLU(),
                                       GraphPool(),
-                                      GraphGather2D(activation="nonsat"))
 
-    # GraphConvLayer(in_dim=64, out_dim=hparams["gconv"]["dim"]),
-    # nn.BatchNorm1d(hparams["gconv"]["dim"]),
-    # nn.ReLU(),
-    # GraphPool(),
-    # GraphGather2D(activation="relu"))
+                                      GraphConvLayer(in_dim=64, out_dim=64),
+                                      nn.BatchNorm1d(64),
+                                      nn.ReLU(),
+                                      GraphPool(),
+
+                                      nn.Linear(in_features=64, out_features=dim),
+                                      nn.BatchNorm1d(dim),
+                                      nn.ReLU(),
+                                      nn.Dropout(hparams["dprob"]),
+                                      GraphGather2D(activation='nonsat'))
 
     model = nn.Sequential(gconv_model)
     return model
@@ -148,16 +155,13 @@ def create_integrated_net(hparams):
 
     layers = [NwayForward(models=views.values())]
 
-    max_dim = max([hparams[c]["dim"] for c in views.keys()])
     seg_dims = [hparams[c]["dim"] for c in views.keys()]
 
-    layers.append(JointAttention(num_segments=seg_dims, d_dims=seg_dims))
+    layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
+                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
 
-    layers.append(nn.Dropout(hparams["dprob"]))
-
-    # linear layer(s)
-    p = sum(seg_dims)
-    for dim in hparams["lin_hdims"]:
+    p = len(views) * hparams["latent_dim"]
+    for dim in hparams["lin_dims"]:
         layers.append(nn.Linear(p, dim))
         layers.append(nn.BatchNorm1d(dim))
         layers.append(nn.ReLU())
@@ -279,6 +283,7 @@ class IntegratedViewDTI(Trainer):
         terminate_training = False
         e_avg = ExpAverage(.01)
         n_epochs = n_iters // len(data_loaders["train"])
+        grad_stats = GradStats(model, beta=0.)
 
         # learning rate decay schedulers
         scheduler = sch.StepLR(optimizer, step_size=10, gamma=0.1)
@@ -324,99 +329,103 @@ class IntegratedViewDTI(Trainer):
 
                     # Iterate through mini-batches
                     i = 0
-                    for batch in tqdm(data_loaders[phase]):
-                        batch_size, data = batch_collator(batch, prot_desc_dict, spec={"ecfp8": use_ecfp8,
-                                                                                       "weave": use_weave,
-                                                                                       "gconv": use_gconv})
-                        # organize the data for each view.
-                        Xs = {}
-                        Ys = {}
-                        Ws = {}
-                        for view_name in data:
-                            view_data = data[view_name]
-                            if view_name == "gconv":
-                                x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
-                                Xs["gconv"] = x
-                            else:
-                                Xs[view_name] = view_data[0]
-                            Ys[view_name] = view_data[1]
-                            Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
+                    with grad_stats:
+                        for batch in tqdm(data_loaders[phase]):
+                            batch_size, data = batch_collator(batch, prot_desc_dict, spec={"ecfp8": use_ecfp8,
+                                                                                           "weave": use_weave,
+                                                                                           "gconv": use_gconv},
+                                                              cuda_prot=prot_model_type == "psc")
+                            # organize the data for each view.
+                            Xs = {}
+                            Ys = {}
+                            Ws = {}
+                            for view_name in data:
+                                view_data = data[view_name]
+                                if view_name == "gconv":
+                                    x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
+                                    Xs["gconv"] = x
+                                else:
+                                    Xs[view_name] = view_data[0]
+                                Ys[view_name] = view_data[1]
+                                Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
 
-                        optimizer.zero_grad()
+                            optimizer.zero_grad()
 
-                        # forward propagation
-                        # track history if only in train
-                        with torch.set_grad_enabled(phase == "train"):
-                            Ys = {k: Ys[k].astype(np.float) for k in Ys}
-                            # Ensure matching labels across views.
-                            for j in range(1, len(Ys.values())):
-                                assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
+                            # forward propagation
+                            # track history if only in train
+                            with torch.set_grad_enabled(phase == "train"):
+                                Ys = {k: Ys[k].astype(np.float) for k in Ys}
+                                # Ensure matching labels across views.
+                                for j in range(1, len(Ys.values())):
+                                    assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
 
-                            y = Ys[list(Xs.keys())[0]]
-                            w = Ws[list(Xs.keys())[0]]
-                            if prot_model_type == "embeddings":
-                                protein_x = Xs[list(Xs.keys())[0]][2]
-                            else:
-                                protein_x = Xs[list(Xs.keys())[0]][1]
-                            X = []
-                            if use_ecfp8:
-                                X.append(Xs["ecfp8"][0])
-                            if use_weave:
-                                X.append(Xs["weave"][0])
-                            if use_gconv:
-                                X.append(Xs["gconv"][0])
-                            if use_prot:
-                                X.append(protein_x)
+                                y = Ys[list(Xs.keys())[0]]
+                                w = Ws[list(Xs.keys())[0]]
+                                if prot_model_type == "embeddings":
+                                    protein_x = Xs[list(Xs.keys())[0]][2]
+                                else:
+                                    protein_x = Xs[list(Xs.keys())[0]][1]
+                                X = []
+                                if use_ecfp8:
+                                    X.append(Xs["ecfp8"][0])
+                                if use_weave:
+                                    X.append(Xs["weave"][0])
+                                if use_gconv:
+                                    X.append(Xs["gconv"][0])
+                                if use_prot:
+                                    X.append(protein_x)
 
-                            outputs = model(X)
-                            target = torch.from_numpy(y).view(-1, 1).float()
-                            valid = torch.ones_like(target).float()
-                            fake = torch.zeros_like(target).float()
-                            if cuda:
-                                target = target.cuda()
-                                valid = valid.cuda()
-                                fake = fake.cuda()
-                            loss = prediction_criterion(outputs, target)
+                                outputs = model(X)
+                                target = torch.from_numpy(y).view(-1, 1).float()
+                                valid = torch.ones_like(target).float()
+                                fake = torch.zeros_like(target).float()
+                                if cuda:
+                                    target = target.cuda()
+                                    valid = valid.cuda()
+                                    fake = fake.cuda()
+                                loss = prediction_criterion(outputs, target)
 
-                        if phase == "train":
-                            # backward pass
-                            loss.backward()
-                            optimizer.step()
+                            if phase == "train":
+                                # backward pass
+                                loss.backward()
+                                optimizer.step()
 
-                            # for epoch stats
-                            epoch_losses.append(loss.item())
-
-                            # for sim data resource
-                            loss_lst.append(loss.item())
-
-                            print("\tEpoch={}/{}, batch={}/{}, pred_loss={:.4f}".format(
-                                epoch + 1, n_epochs,
-                                i + 1,
-                                len(data_loaders[phase]), loss.item()))
-                        else:
-                            if str(loss.item()) != "nan":  # useful in hyperparameter search
-                                eval_dict = {}
-                                score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
-                                                transformers_dict[list(Xs.keys())[0]])
                                 # for epoch stats
-                                epoch_scores.append(score)
+                                epoch_losses.append(loss.item())
 
                                 # for sim data resource
-                                scores_lst.append(score)
-                                for m in eval_dict:
-                                    if m in metrics_dict:
-                                        metrics_dict[m].append(eval_dict[m])
-                                    else:
-                                        metrics_dict[m] = [eval_dict[m]]
+                                loss_lst.append(loss.item())
 
-                                print("\nEpoch={}/{}, batch={}/{}, "
-                                      "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
-                                                                                len(data_loaders[phase]),
-                                                                                eval_dict, score))
+                                print("\tEpoch={}/{}, batch={}/{}, pred_loss={:.4f}".format(
+                                    epoch + 1, n_epochs,
+                                    i + 1,
+                                    len(data_loaders[phase]), loss.item()))
+                            else:
+                                if str(loss.item()) != "nan":  # useful in hyperparameter search
+                                    eval_dict = {}
+                                    score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
+                                                    transformers_dict[list(Xs.keys())[0]])
+                                    # for epoch stats
+                                    epoch_scores.append(score)
 
-                        i += 1
-                        data_size += batch_size
-                    # End of mini=batch iterations.
+                                    # for sim data resource
+                                    scores_lst.append(score)
+                                    for m in eval_dict:
+                                        if m in metrics_dict:
+                                            metrics_dict[m].append(eval_dict[m])
+                                        else:
+                                            metrics_dict[m] = [eval_dict[m]]
+
+                                    print("\nEpoch={}/{}, batch={}/{}, "
+                                          "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
+                                                                                    len(data_loaders[phase]),
+                                                                                    eval_dict, score))
+                                else:
+                                    terminate_training = True
+
+                            i += 1
+                            data_size += batch_size
+                        # End of mini=batch iterations.
 
                     if phase == "train":
                         ep_loss = np.nanmean(epoch_losses)
@@ -745,39 +754,41 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
-        "attn_heads": [2, 1, 1],
-        "proj_out_dim": 1634,
-        "lin_hdims": [81],
+        "attn_heads": 4,
+        "attn_layers": 2,
+        "lin_dims": [2286, 1669],
+        "latent_dim": 512,
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout
-        "dprob": 0.4120111047648317,
+        "dprob": 0.0519347,
 
-        "tr_batch_size": 128,
+        "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "adagrad",
-        "optimizer__global__weight_decay": 0.0037022869206988418,
-        "optimizer__global__lr": 0.002358913764815064,
+        "optimizer__global__weight_decay": 0.00312756,
+        "optimizer__global__lr": 0.000867065,
+        "optimizer__adagrad__lr_decay": 0.000496165,
 
         "prot": {
-            "model_type": "embeddings",
+            "model_type": "psc",
             "in_dim": 8421,
-            "dim": 512,
+            "dim": 8421,
             "vocab_size": flags["prot_vocab_size"],
             "protein_profile": flags["protein_profile"],
-            "hidden_dim": 128,
+            # "hidden_dim": 128,
         },
         "weave": {
             "dim": 50,
             "update_pairs": False,
         },
         "gconv": {
-            "dim": 128,
+            "dim": 256,
         },
         "ecfp8": {
             "dim": 1024,
@@ -788,9 +799,10 @@ def default_hparams_bopt(flags):
 def get_hparam_config(flags):
     return {
         "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
-        # "attn_heads": DiscreteParam(min=1, max=4, size=DiscreteParam(min=1, max=4)),
-        # "proj_out_dim": DiscreteParam(min=512, max=2048),
-        "lin_hdims": DiscreteParam(min=64, max=1024, size=DiscreteParam(min=1, max=3)),
+        "attn_heads": CategoricalParam([1, 2, 4, 8]),
+        "attn_layers": DiscreteParam(min=1, max=4),
+        "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
+        "latent_dim": DiscreteParam(min=512, max=2048),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
@@ -808,16 +820,16 @@ def get_hparam_config(flags):
         "optimizer__global__lr": LogRealParam(),
 
         "prot": DictParam({
-            "model_type": ConstantParam("Identity"),
+            "model_type": ConstantParam("psc"),
             "in_dim": ConstantParam(8421),
-            "dim": DiscreteParam(min=5, max=50),
+            "dim": CategoricalParam(choices=[512, 1024, 2048]),
         }),
         "weave": DictParam({
             # "dim": DiscreteParam(min=64, max=512),
             "update_pairs": ConstantParam(False),
         }),
         "gconv": DictParam({
-            "dim": DiscreteParam(min=5, max=50),
+            "dim": CategoricalParam([128, 256, 512]),
         }),
         "ecfp8": DictParam({
             "dim": ConstantParam(1024),

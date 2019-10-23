@@ -13,9 +13,8 @@ from abc import ABC
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch_scatter import scatter_add, scatter_max
-
-from adgcca.utils.math import segment_sum
 
 from ivpgan.utils.train_helpers import get_activation_func
 
@@ -217,7 +216,11 @@ class WeaveGather2D(WeaveGather):
         if self.gaussian_expand:
             outputs = self.linear(outputs)
             outputs = self.activation(outputs) if self.activation else outputs
-        outputs = _group_atoms(outputs, n_atoms_lst)
+        # outputs = _group_atoms(outputs, n_atoms_lst)
+        max_dim = max(n_atoms_lst)
+        mols = outputs.split(n_atoms_lst)
+        mols = [F.pad(m, (0, 0, 0, max_dim - m.shape[0])) for m in mols]
+        outputs = torch.stack(mols, dim=1)
         return outputs, pair_features
 
 
@@ -409,7 +412,10 @@ class GraphGather2D(GraphGather):
 
     def forward(self, input_data, batch_size):
         atom_features, membership, n_atoms_lst = input_data[0], input_data[2], input_data[3]
-        outputs = _group_atoms(atom_features, n_atoms_lst)
+        max_dim = max(n_atoms_lst)
+        mols = atom_features.split(n_atoms_lst)
+        mols = [F.pad(m, (0, 0, 0, max_dim - m.shape[0])) for m in mols]
+        outputs = torch.stack(mols, dim=1)
         if self.activation:
             mol_features = self.activation(outputs) if self.activation else outputs
         return mol_features
@@ -533,4 +539,4 @@ class Unsqueeze(nn.Module):
         self.dim = dim
 
     def forward(self, x):
-        return x.unsqueeze(dim=1)
+        return x.unsqueeze(dim=self.dim)

@@ -13,5 +13,5 @@ The bash file with *\_eval\_* in their names are used for evaluating a trained m
 structure to aggregate all training and evaluation statistics which are then saved
  as JSON files for later analysis. For more on the resource tree structure, you can examine 
  [sim_data.py](./ivpgan/utils/sim_data.py) and its usage in [singleview.py](./proj/dti/singleview.py) and
- [train_joint_gan.py](./proj/dti/train_joint_gan.py). The performance data saved in a JSON file of 
+ [train_joint_gan.py](proj/dti/train_joint_gan_attn.py). The performance data saved in a JSON file of 
  each evaluated model is analysed using [worker.py](./proj/dti/worker.py).

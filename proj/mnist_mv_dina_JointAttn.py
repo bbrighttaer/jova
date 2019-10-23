@@ -69,12 +69,11 @@ class MnistPoc(Trainer):
             seg_dims.append(base_shape[1])
             d_dims.append(base_shape[-1])
             vws_lst.append(net)
-        max_dim = max(seg_dims)
+
         latent_dim = 256
         model = nn.Sequential(NwayForward(vws_lst),
-                              JointAttention(num_segments=seg_dims, d_dims=d_dims, latent_dim=latent_dim),
-                              nn.Dropout(hparams["dprob"]),
-                              nn.Linear(len(vws_lst) * latent_dim, 10))
+                              JointAttention(d_dims=d_dims, latent_dim=latent_dim, dprob=hparams["dprob"]),
+                              nn.Linear(latent_dim, 10))
 
         if cuda:
             model = model.cuda()

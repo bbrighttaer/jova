@@ -31,10 +31,11 @@ from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
 from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather
-from ivpgan.nn.models import GraphConvSequential, PairSequential, create_fcn_layers
+from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, GraphGather2D, Unsqueeze
+from ivpgan.nn.models import GraphConvSequential, PairSequential, create_fcn_layers, NwayForward, JointAttention, \
+    WeaveModel, Prot2Vec
 from ivpgan.utils import Trainer, io
-from ivpgan.utils.args import FcnArgs
+from ivpgan.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.train_helpers import count_parameters
 
@@ -45,13 +46,79 @@ seeds = [123, 124, 125]
 
 check_data = False
 
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
-# cuda = torch.cuda.is_available()
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 
-def create_integrated_net(hparams):
-    # segment 1 - graphconv
+use_ecfp8 = True
+use_weave = False
+use_gconv = True
+use_prot = True
+
+
+def create_ecfp_net(hparams):
+    model = nn.Sequential(Unsqueeze(dim=0))
+    return model
+
+
+def create_prot_net(hparams):
+    if hparams["prot"]["model_type"].lower() == "rnn":
+        pass
+        # model = ProteinFeatLearning(protein_profile=hparams["prot"]["protein_profile"],
+        #                             vocab_size=hparams["prot"]["vocab_size"],
+        #                             embedding_dim=hparams["prot"]["dim"],
+        #                             hidden_dim=hparams["prot"]["hidden_dim"],
+        #                             dropout=hparams["dprob"])
+    elif hparams["prot"]["model_type"].lower() == "embeddings":
+        model = Prot2Vec(protein_profile=hparams["prot"]["protein_profile"],
+                         vocab_size=hparams["prot"]["vocab_size"],
+                         embedding_dim=hparams["prot"]["dim"])
+    else:
+        # model = nn.Sequential(nn.Linear(hparams["prot"]["in_dim"], hparams["prot"]["dim"]),
+        #                       nn.BatchNorm1d(hparams["prot"]["dim"]),
+        #                       NonsatActivation(),
+        #                       Unsqueeze(dim=1))
+        model = nn.Sequential(Unsqueeze(dim=0))
+    return model
+
+
+def create_weave_net(hparams):
+    weave_args = (
+        WeaveLayerArgs(n_atom_input_feat=75,
+                       n_pair_input_feat=14,
+                       n_atom_output_feat=50,
+                       # n_atom_output_feat=hparams["weave"]["dim"],
+                       n_pair_output_feat=50,
+                       n_hidden_AA=50,
+                       n_hidden_PA=50,
+                       n_hidden_AP=50,
+                       n_hidden_PP=50,
+                       update_pair=hparams["weave"]["update_pairs"],
+                       activation='relu',
+                       batch_norm=True,
+                       dropout=hparams["dprob"]
+                       ),
+        WeaveLayerArgs(n_atom_input_feat=50,
+                       n_pair_input_feat=14,
+                       n_atom_output_feat=hparams["weave"]["dim"],
+                       n_pair_output_feat=50,
+                       n_hidden_AA=50,
+                       n_hidden_PA=50,
+                       n_hidden_AP=50,
+                       n_hidden_PP=50,
+                       update_pair=hparams["weave"]["update_pairs"],
+                       batch_norm=True,
+                       dropout=hparams["dprob"],
+                       activation='relu'),
+    )
+    wg_args = WeaveGatherArgs(conv_out_depth=hparams["weave"]["dim"], gaussian_expand=True,
+                              n_depth=hparams["weave"]["dim"])
+    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='2D')
+    model = nn.Sequential(weave_model)
+    return model
+
+
+def create_gconv_net(hparams):
+    dim = hparams["gconv"]["dim"]
     gconv_model = GraphConvSequential(GraphConvLayer(in_dim=75, out_dim=64),
                                       nn.BatchNorm1d(64),
                                       nn.ReLU(),
@@ -62,39 +129,50 @@ def create_integrated_net(hparams):
                                       nn.ReLU(),
                                       GraphPool(),
 
-                                      nn.Linear(in_features=64, out_features=hparams["gconv_dim"]),
-                                      nn.BatchNorm1d(hparams["gconv_dim"]),
+                                      nn.Linear(in_features=64, out_features=dim),
+                                      nn.BatchNorm1d(dim),
                                       nn.ReLU(),
                                       nn.Dropout(hparams["dprob"]),
-                                      GraphGather())
+                                      GraphGather2D(activation='nonsat'))
 
-    # segment 2 - fingerprint
-    fp_net = nn.Identity()
+    model = nn.Sequential(gconv_model)
+    return model
 
-    # segment 3 - protein
-    prot_net = nn.Identity()
 
-    civ_net = PairSequential((PairSequential(mod1=(gconv_model,),
-                                             mod2=(fp_net,)),),
-                             (prot_net,))
+def create_integrated_net(hparams):
+    # N-way forward propagation
+    views = {}
 
-    civ_dim = hparams["prot_dim"] + hparams["gconv_dim"] * 2 + hparams["fp_dim"]
-    fcn_args = []
-    p = civ_dim
-    layers = hparams["hdims"]
-    if not isinstance(layers, list):
-        layers = [layers]
-    for dim in layers:
-        conf = FcnArgs(in_features=p,
-                       out_features=dim,
-                       activation='relu',
-                       batch_norm=True,
-                       dropout=hparams["dprob"])
-        fcn_args.append(conf)
+    if use_ecfp8:
+        views["ecfp8"] = create_ecfp_net(hparams)
+    if use_weave:
+        views["weave"] = create_weave_net(hparams)
+    if use_gconv:
+        views["gconv"] = create_gconv_net(hparams)
+    if use_prot:
+        views["prot"] = create_prot_net(hparams)
+
+    layers = [NwayForward(models=views.values())]
+
+    seg_dims = [hparams[c]["dim"] for c in views.keys()]
+
+    layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
+                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
+
+    p = len(views) * hparams["latent_dim"]
+    for dim in hparams["lin_dims"]:
+        layers.append(nn.Linear(p, dim))
+        layers.append(nn.BatchNorm1d(dim))
+        layers.append(nn.ReLU())
+        layers.append(nn.Dropout(hparams["dprob"]))
         p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
-    fcn_layers = create_fcn_layers(fcn_args)
-    model = nn.Sequential(civ_net, *fcn_layers)
+
+    # Output layer
+    layers.append(nn.Linear(in_features=p, out_features=1))
+
+    # Build model
+    model = nn.Sequential(*layers)
+
     return model
 
 
@@ -227,7 +305,7 @@ class IntegratedViewDTI(Trainer):
 
     @staticmethod
     def train(eval_fn, models, optimizers, data_loaders, metrics, weighted_loss, neigh_dist, transformers_dict,
-              prot_desc_dict, tasks, n_iters=5000, sim_data_node=None):
+              prot_desc_dict, tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0)):
         generator, discriminator = models
         optimizer_gen, optimizer_disc = optimizers
 
