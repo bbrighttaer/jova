@@ -34,7 +34,7 @@ from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
 from ivpgan.nn.models import GraphConvSequential, create_fcn_layers, WeaveModel, NwayForward, DINA, Projector, \
-    ProteinFeatLearning
+    ProteinRNN
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.sim_data import DataNode
@@ -62,11 +62,11 @@ def create_ecfp_net(hparams):
 
 def create_prot_net(hparams):
     if hparams["prot"]["model_type"].lower() == "embedding":
-        model = ProteinFeatLearning(protein_profile=hparams["prot"]["protein_profile"],
-                                    vocab_size=hparams["prot"]["vocab_size"],
-                                    embedding_dim=hparams["prot"]["dim"],
-                                    hidden_dim=hparams["prot"]["hidden_dim"],
-                                    dropout=hparams["dprob"])
+        model = ProteinRNN(protein_profile=hparams["prot"]["protein_profile"],
+                           vocab_size=hparams["prot"]["vocab_size"],
+                           embedding_dim=hparams["prot"]["dim"],
+                           hidden_dim=hparams["prot"]["hidden_dim"],
+                           dropout=hparams["dprob"])
     else:
         model = nn.Sequential(nn.Linear(hparams["prot"]["in_dim"], hparams["prot"]["dim"]),
                               nn.BatchNorm1d(hparams["prot"]["dim"]),

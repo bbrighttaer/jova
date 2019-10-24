@@ -26,9 +26,18 @@ def split_sequence(sequence, ngram, vocab_dict):
     return np.array(words)
 
 
-def dump_dictionary(dictionary, filename):
+def split_sequence_with_offset(sequence, ngram=3, offsets=(0,)):
+    all_words = []
+    for offset in offsets:
+        words = [sequence[i:i + ngram]
+                 for i in range(offset, len(sequence) - offset - ngram + 1)]
+        all_words += words
+    return all_words
+
+
+def dump_binary(dictionary, filename, clazz):
     with open(filename, 'wb') as f:
-        pickle.dump(dict(dictionary), f)
+        pickle.dump(clazz(dictionary), f)
 
 
 if __name__ == '__main__':
@@ -53,6 +62,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     word_dict = defaultdict(lambda: len(word_dict))
+    words = []
     proteins = {}
 
     for file in args.prot_files:
@@ -64,9 +74,10 @@ if __name__ == '__main__':
             if args.verbose:
                 print("Label={}, Sequence={}".format(label, sequence))
             protein_profile = split_sequence(sequence, args.ngram, word_dict)
+            words += split_sequence_with_offset(sequence, args.ngram, offsets=(0, 1, 2))
             proteins[label] = protein_profile
-
     print("Saving files...")
-    dump_dictionary(proteins, '../../data/{}/proteins.profile'.format(args.dataset))
-    dump_dictionary(word_dict, '../../data/{}/proteins.vocab'.format(args.dataset))
+    dump_binary(proteins, '../../data/{}/proteins.profile'.format(args.dataset), dict)
+    dump_binary(word_dict, '../../data/{}/proteins.vocab'.format(args.dataset), dict)
+    dump_binary(words, '../../data/{}/words.list'.format(args.dataset), set)
     print("Info: vocab size={}, protein profiles saved={}".format(len(word_dict), len(proteins)))

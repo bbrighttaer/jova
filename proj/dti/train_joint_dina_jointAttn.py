@@ -34,7 +34,7 @@ from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
-from ivpgan.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec
+from ivpgan.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.math import ExpAverage, Count
@@ -64,12 +64,11 @@ def create_ecfp_net(hparams):
 
 def create_prot_net(hparams):
     if hparams["prot"]["model_type"].lower() == "rnn":
-        pass
-        # model = ProteinFeatLearning(protein_profile=hparams["prot"]["protein_profile"],
-        #                             vocab_size=hparams["prot"]["vocab_size"],
-        #                             embedding_dim=hparams["prot"]["dim"],
-        #                             hidden_dim=hparams["prot"]["hidden_dim"],
-        #                             dropout=hparams["dprob"])
+        model = ProteinRNN(protein_profile=hparams["prot"]["protein_profile"],
+                           vocab_size=hparams["prot"]["vocab_size"],
+                           embedding_dim=hparams["prot"]["dim"],
+                           hidden_dim=hparams["prot"]["hidden_dim"],
+                           dropout=hparams["dprob"])
     elif hparams["prot"]["model_type"].lower() == "p2v":
         model = Prot2Vec(protein_profile=hparams["prot"]["protein_profile"],
                          vocab_size=hparams["prot"]["vocab_size"],
@@ -159,15 +158,16 @@ def create_integrated_net(hparams):
     seg_dims = [hparams[c]["dim"] for c in views.keys()]
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
-                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
+                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"],
+                                 inner_layer_dim=hparams["inner_layer_dim"]))
 
     p = len(views) * hparams["latent_dim"]
-    # for dim in hparams["lin_dims"]:
-    #     layers.append(nn.Linear(p, dim))
-    #     layers.append(nn.BatchNorm1d(dim))
-    #     layers.append(nn.ReLU())
-    #     layers.append(nn.Dropout(hparams["dprob"]))
-    #     p = dim
+    for dim in hparams["lin_dims"]:
+        layers.append(nn.Linear(p, dim))
+        layers.append(nn.BatchNorm1d(dim))
+        layers.append(nn.ReLU())
+        layers.append(nn.Dropout(hparams["dprob"]))
+        p = dim
 
     # Output layer
     layers.append(nn.Linear(in_features=p, out_features=1))
@@ -287,7 +287,7 @@ class IntegratedViewDTI(Trainer):
         grad_stats = GradStats(model, beta=0.)
 
         # learning rate decay schedulers
-        scheduler = sch.StepLR(optimizer, step_size=10, gamma=0.1)
+        scheduler = sch.StepLR(optimizer, step_size=500, gamma=0.01)
 
         # pred_loss functions
         prediction_criterion = nn.MSELoss()
@@ -364,7 +364,7 @@ class IntegratedViewDTI(Trainer):
 
                                     y = Ys[list(Xs.keys())[0]]
                                     w = Ws[list(Xs.keys())[0]]
-                                    if prot_model_type == "p2v" or "rnn":
+                                    if prot_model_type == "p2v" or prot_model_type == "rnn":
                                         protein_x = Xs[list(Xs.keys())[0]][2]
                                     else:
                                         protein_x = Xs[list(Xs.keys())[0]][1]
@@ -644,6 +644,7 @@ def main(flags):
                     search_alg = {"random_search": RandomSearchCV,
                                   "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
                                                                             BayesianOptSearchCV)
+                    min_opt = "gbrt"
                     hparam_search = search_alg(hparam_config=hparams_conf,
                                                num_folds=k,
                                                initializer=trainer.initialize,
@@ -657,10 +658,10 @@ def main(flags):
                                                data_node=data_node,
                                                split_label=split_label,
                                                sim_label=sim_label,
-                                               minimizer="gp",
+                                               minimizer=min_opt,
                                                dataset_label=dataset_lbl,
-                                               results_file="{}_{}_dti_{}.csv".format(
-                                                   flags["hparam_search_alg"], sim_label, date_label))
+                                               results_file="{}_{}_dti_{}_{}.csv".format(
+                                                   flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
                 stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
                 print(stats)
@@ -776,32 +777,34 @@ def default_hparams_bopt(flags):
     rnn         | Uses embeddings and an RNN variant (e.g. LSTM) to learn protein features.
     ------------|---------------------------------------------------------------------------
     """
+    prot_model = "psc"
     return {
-        "attn_heads": 1,
+        "attn_heads": 8,
         "attn_layers": 1,
-        # "lin_dims": [2286, 1669],
-        "latent_dim": 128,
+        "lin_dims": [1937, 445, 64],
+        "latent_dim": 256,
+        "inner_layer_dim": 2048,
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout
-        "dprob": 0.0519347,
+        "dprob": 0.13,
 
-        "tr_batch_size": 32,
+        "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
-        "optimizer": "adagrad",
-        "optimizer__global__weight_decay": 0.00312756,
+        "optimizer": "adam",
+        "optimizer__global__weight_decay": 0.0001,
         # "optimizer__global__lr": 0.000867065,
-        "optimizer__global__lr": 0.0008,
+        "optimizer__global__lr": 0.0001,
         # "optimizer__adagrad__lr_decay": 0.000496165,
         "prot": {
-            "model_type": "p2v",
+            "model_type": prot_model,
             "in_dim": 8421,
-            "dim": 10,
+            "dim": 8421 if prot_model == "psc" else 10,
             "vocab_size": flags["prot_vocab_size"],
             "protein_profile": flags["protein_profile"],
             # "hidden_dim": 128,
@@ -811,7 +814,7 @@ def default_hparams_bopt(flags):
             "update_pairs": False,
         },
         "gconv": {
-            "dim": 256,
+            "dim": 487,
         },
         "ecfp8": {
             "dim": 1024,
@@ -823,9 +826,10 @@ def get_hparam_config(flags):
     return {
         "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
-        "attn_layers": DiscreteParam(min=1, max=5),
-        # "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
+        "attn_layers": DiscreteParam(min=1, max=3),
+        "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
         "latent_dim": CategoricalParam(choices=[64, 128, 256, 512]),
+        "inner_layer_dim": CategoricalParam([64, 128, 256, 512, 1024, 2048]),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
