@@ -378,6 +378,28 @@ def nonsat_activation(x, ep=1e-4, max_iter=100):
             y = y_.detach()
 
 
+class ResBlock(nn.Module):
+    def __init__(self, in_features, out_features, dprob, activation='relu'):
+        super(ResBlock, self).__init__()
+        self.activation = get_activation_func(activation)
+        self.net1 = nn.Sequential(nn.Linear(in_features, out_features),
+                                  nn.BatchNorm1d(out_features),
+                                  nn.ReLU(),
+                                  nn.Dropout(dprob))
+        self.net2 = nn.Sequential(nn.Linear(out_features, out_features),
+                                  nn.BatchNorm1d(out_features),
+                                  nn.ReLU(),
+                                  nn.Dropout(dprob))
+        self.bn_out = nn.BatchNorm1d(out_features)
+
+    def forward(self, x):
+        x = self.net1(x)
+        x = x + self.net2(x)
+        x = self.bn_out(x)
+        x = self.activation(x)
+        return x
+
+
 class DINA(nn.Module):
 
     def __init__(self, total_dim, activation=nonsat_activation, heads=1, bias=True):
@@ -590,6 +612,7 @@ class Prot2Vec(nn.Module):
 
         # get protein embeddings
         embeddings = self.embedding(x)
+        embeddings = embeddings.permute(1, 0, 2)  # change into: [num_segments, batch_size, d_model]
         embeddings = self.activation(embeddings)
         return embeddings
 
@@ -651,6 +674,7 @@ class JointAttention(nn.Module):
         self.attention_models = nn.ModuleList([nn.MultiheadAttention(embed_dim=self.latent_dim,
                                                                      num_heads=num_heads, dropout=dprob)
                                                for _ in range(num_layers)])
+        self.res_blks = nn.ModuleList([SegmentWiseResBlock(d_model=latent_dim) for _ in range(num_layers)])
         self.activation = get_activation_func(activation)
         self.dropout = nn.Dropout(dprob)
         self.batch_norm = nn.BatchNorm1d(latent_dim * len(d_dims))
@@ -679,17 +703,17 @@ class JointAttention(nn.Module):
         num_segs = [x.shape[0] for x in inputs]
 
         # projection of segments into low dimensional space
-        xs = [(self.lin_prjs[i](x.view(-1, x.shape[-1]))).view(*x.shape[:2], -1) for i, x in enumerate(inputs)]
+        xs = [(self.lin_prjs[i](x.reshape(-1, x.shape[-1]))).reshape(*x.shape[:2], -1) for i, x in enumerate(inputs)]
 
         # join all segments along the 'seq' dimension
         x = torch.cat(xs)
 
         # self-attention
         wts_lst = []
-        for attn_net in self.attention_models:
+        for attn_net, res_net in zip(self.attention_models, self.res_blks):
             # self-attention
             x, wts = attn_net(x, x, x)
-            x = self.activation(x)
+            x = res_net(x)
             wts_lst.append(wts)
 
         # compute view representations
@@ -699,4 +723,52 @@ class JointAttention(nn.Module):
         # concat view reps
         x = torch.cat(xs, 1)
         x = self.dropout(self.activation(self.batch_norm(x)))
+        return x
+
+
+class SegmentWiseLinear(nn.Module):
+
+    def __init__(self, d_model, activation='relu', inner_layer_dim=2048):
+        super(SegmentWiseLinear, self).__init__()
+        self.activation = get_activation_func(activation)
+        self.linear1 = nn.Linear(d_model, inner_layer_dim)
+        self.linear2 = nn.Linear(inner_layer_dim, d_model)
+
+    def forward(self, x):
+        """
+        x shape: [num_segments, batch_size, d_model]
+        :param x: tensor
+        :return: output shape: [num_segments, batch_size, d_model]
+        """
+        num_seg, bsize, d_model = x.shape
+
+        # Get the position/segment-wise tensor
+        x = x.view(num_seg * bsize, d_model)
+
+        # apply projections
+        x = self.linear1(x)
+        x = self.activation(x)
+        x = self.linear2(x)
+        x = x.view(num_seg, bsize, d_model)
+        return x
+
+
+class SegmentWiseResBlock(nn.Module):
+
+    def __init__(self, d_model, activation='relu'):
+        super(SegmentWiseResBlock, self).__init__()
+        self.batch_norm = nn.BatchNorm1d(d_model)
+        self.seg_lin = SegmentWiseLinear(d_model, activation)
+        self.activation = get_activation_func(activation)
+
+    def forward(self, x):
+        """
+        x shape: [num_segments, batch_size, d_model]
+        :param x: tensor
+        :return: output shape: [num_segments, batch_size, d_model]
+        """
+        num_seg, bsize, d_model = x.shape
+        x = x + self.seg_lin(x)
+        x = self.batch_norm(x.view(num_seg * bsize, d_model)).view(num_seg, bsize, d_model)
+        x = self.activation(x)
         return x

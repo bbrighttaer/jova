@@ -176,3 +176,12 @@ class Count(object):
 
     def inc(self):
         self.i += 1
+
+    def getAndInc(self):
+        r = self.i
+        self.inc()
+        return r
+
+    def IncAndGet(self):
+        self.inc()
+        return self.i

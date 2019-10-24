@@ -22,13 +22,14 @@ import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from deepchem.trans import undo_transforms
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import ivpgan.metrics as mt
 from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
 from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
+from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam, RealParam
 from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, GraphGather2D, Unsqueeze
@@ -36,8 +37,10 @@ from ivpgan.nn.models import GraphConvSequential, PairSequential, create_fcn_lay
     WeaveModel, Prot2Vec
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
+from ivpgan.utils.math import ExpAverage, Count
 from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters
+from ivpgan.utils.tb import TBMeanTracker
+from ivpgan.utils.train_helpers import count_parameters, GradStats, load_pickle
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -47,7 +50,6 @@ seeds = [123, 124, 125]
 check_data = False
 
 torch.cuda.set_device(0)
-
 
 use_ecfp8 = True
 use_weave = False
@@ -187,7 +189,7 @@ def create_discriminator_net(hparams):
                        out_features=dim,
                        activation='relu',
                        batch_norm=True,
-                       dropout=hparams["disc_dprob"])
+                       dropout=hparams["dprob"])
         fcn_args.append(conf)
         p = dim
     fcn_args.append(FcnArgs(in_features=p, out_features=1, activation="sigmoid"))
@@ -263,7 +265,8 @@ class IntegratedViewDTI(Trainer):
         return (generator, discriminator), (optimizer_gen, optimizer_disc), \
                {"train": train_data_loader,
                 "val": val_data_loader,
-                "test": test_data_loader}, metrics, hparams["weighted_loss"], hparams["neigh_dist"]
+                "test": test_data_loader}, metrics, hparams["prot"]["model_type"], \
+               hparams["weighted_loss"], hparams["neigh_dist"]
 
     @staticmethod
     def data_provider(fold, flags, data_dict):
@@ -304,8 +307,9 @@ class IntegratedViewDTI(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, models, optimizers, data_loaders, metrics, weighted_loss, neigh_dist, transformers_dict,
-              prot_desc_dict, tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0)):
+    def train(eval_fn, models, optimizers, data_loaders, metrics, prot_model_type, weighted_loss, neigh_dist,
+              transformers_dict, prot_desc_dict, tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0),
+              tb_writer=None):
         generator, discriminator = models
         optimizer_gen, optimizer_disc = optimizers
 
@@ -313,11 +317,14 @@ class IntegratedViewDTI(Trainer):
         best_model_wts = generator.state_dict()
         best_score = -10000
         best_epoch = -1
+        terminate_training = False
+        e_avg = ExpAverage(.2)
         n_epochs = n_iters // len(data_loaders["train"])
+        grad_stats = GradStats(nn.ModuleList(models), beta=0.)
 
         # learning rate decay schedulers
-        scheduler_gen = sch.StepLR(optimizer_gen, step_size=40, gamma=0.01)
-        scheduler_disc = sch.StepLR(optimizer_disc, step_size=40, gamma=0.01)
+        scheduler_gen = sch.StepLR(optimizer_gen, step_size=10, gamma=0.01)
+        scheduler_disc = sch.StepLR(optimizer_disc, step_size=10, gamma=0.01)
 
         # pred_loss functions
         prediction_criterion = nn.MSELoss()
@@ -339,142 +346,180 @@ class IntegratedViewDTI(Trainer):
         if sim_data_node:
             sim_data_node.data = [train_loss_node, metrics_node, scores_node, gen_loss_node, dis_loss_node]
 
-        # Main training loop
-        for epoch in range(n_epochs):
-            for phase in ["train", "val"]:
-                if phase == "train":
-                    print("Training....")
-                    # Adjust the learning rate.
-                    # scheduler_gen.step()
-                    # Training mode
-                    generator.train()
-                    discriminator.train()
-                else:
-                    print("Validation...")
-                    # Evaluation mode
-                    generator.eval()
+        try:
+            # Main training loop
+            tb_idx = Count()
+            for epoch in range(n_epochs):
+                if terminate_training:
+                    print("Terminating training...")
+                    break
+                for phase in ["train", "val"]:
+                    if phase == "train":
+                        print("Training....")
+                        # Training mode
+                        generator.train()
+                        discriminator.train()
+                    else:
+                        print("Validation...")
+                        # Evaluation mode
+                        generator.eval()
 
-                data_size = 0.
-                epoch_losses = []
-                epoch_scores = []
+                    data_size = 0.
+                    epoch_losses = []
+                    epoch_scores = []
 
-                # Iterate through mini-batches
-                i = 0
-                for batch in tqdm(data_loaders[phase]):
-                    batch_size, data = batch_collator(batch, prot_desc_dict, spec={"gconv": True,
-                                                                                   "ecfp8": True})
-                    # organize the data for each view.
-                    Xs = {}
-                    Ys = {}
-                    Ws = {}
-                    for view_name in data:
-                        view_data = data[view_name]
-                        if view_name == "gconv":
-                            x = ((view_data[0][0], batch_size), view_data[0][1])
-                            Xs["gconv"] = x
-                        else:
-                            Xs[view_name] = view_data[0]
-                        Ys[view_name] = view_data[1]
-                        Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
+                    # Iterate through mini-batches
+                    i = 0
+                    with TBMeanTracker(tb_writer, 10) as tracker:
+                        with grad_stats:
+                            for batch in tqdm(data_loaders[phase]):
+                                batch_size, data = batch_collator(batch, prot_desc_dict, spec={"ecfp8": use_ecfp8,
+                                                                                               "weave": use_weave,
+                                                                                               "gconv": use_gconv},
+                                                                  cuda_prot=prot_model_type == "psc")
+                                # organize the data for each view.
+                                Xs = {}
+                                Ys = {}
+                                Ws = {}
+                                for view_name in data:
+                                    view_data = data[view_name]
+                                    if view_name == "gconv":
+                                        x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
+                                        Xs["gconv"] = x
+                                    else:
+                                        Xs[view_name] = view_data[0]
+                                    Ys[view_name] = view_data[1]
+                                    Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
 
-                    optimizer_gen.zero_grad()
-                    optimizer_disc.zero_grad()
+                                optimizer_gen.zero_grad()
+                                optimizer_disc.zero_grad()
 
-                    # forward propagation
-                    # track history if only in train
-                    with torch.set_grad_enabled(phase == "train"):
-                        Ys = {k: Ys[k].astype(np.float) for k in Ys}
-                        # Ensure corresponding pairs
-                        for j in range(1, len(Ys.values())):
-                            assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
+                                # forward propagation
+                                # track history if only in train
+                                with torch.set_grad_enabled(phase == "train"):
+                                    Ys = {k: Ys[k].astype(np.float) for k in Ys}
+                                    # Ensure corresponding pairs
+                                    for j in range(1, len(Ys.values())):
+                                        assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
 
-                        y = Ys["gconv"]
-                        w = Ws["gconv"]
-                        X = ((Xs["gconv"][0], Xs["ecfp8"][0]), Xs["gconv"][1])
+                                    y = Ys[list(Xs.keys())[0]]
+                                    w = Ws[list(Xs.keys())[0]]
+                                    if prot_model_type == "embeddings":
+                                        protein_x = Xs[list(Xs.keys())[0]][2]
+                                    else:
+                                        protein_x = Xs[list(Xs.keys())[0]][1]
+                                    X = []
+                                    if use_ecfp8:
+                                        X.append(Xs["ecfp8"][0])
+                                    if use_weave:
+                                        X.append(Xs["weave"][0])
+                                    if use_gconv:
+                                        X.append(Xs["gconv"][0])
+                                    if use_prot:
+                                        X.append(protein_x)
 
-                        outputs = generator(X)
-                        target = torch.from_numpy(y).view(-1, 1).float()
-                        valid = torch.ones_like(target).float()
-                        fake = torch.zeros_like(target).float()
-                        if cuda:
-                            target = target.cuda()
-                            valid = valid.cuda()
-                            fake = fake.cuda()
-                        pred_loss = prediction_criterion(outputs, target)
+                                    outputs = generator(X)
+                                    target = torch.from_numpy(y).view(-1, 1).float()
+                                    valid = torch.ones_like(target).float()
+                                    fake = torch.zeros_like(target).float()
+                                    if cuda:
+                                        target = target.cuda()
+                                        valid = valid.cuda()
+                                        fake = fake.cuda()
+                                    pred_loss = prediction_criterion(outputs, target)
+
+                                    # (Hyperparameter search hack - avoids problems with BCE criterion receiving nans.
+                                    if str(pred_loss.item()) == "nan":
+                                        terminate_training = True
+                                        break
+
+                                if phase == "train":
+                                    tracker.track("train_pred_loss", pred_loss.item(), tb_idx.IncAndGet())
+
+                                    # GAN stuff
+                                    f_xx, f_yy = torch.meshgrid(outputs.squeeze(), outputs.squeeze())
+                                    predicted_diffs = torch.abs(f_xx - f_yy).sort(dim=1)[0][:, : neigh_dist]
+                                    r_xx, r_yy = torch.meshgrid(target.squeeze(), target.squeeze())
+                                    real_diffs = torch.abs(r_xx - r_yy).sort(dim=1)[0][:, :neigh_dist]
+
+                                    # generator
+                                    gen_loss = adversarial_loss(discriminator(predicted_diffs), valid)
+                                    gen_loss_lst.append(gen_loss.item())
+                                    loss = pred_loss + weighted_loss * gen_loss
+                                    loss.backward()
+                                    optimizer_gen.step()
+
+                                    # discriminator
+                                    true_loss = adversarial_loss(discriminator(real_diffs), valid)
+                                    fake_loss = adversarial_loss(discriminator(predicted_diffs.detach()), fake)
+                                    discriminator_loss = (true_loss + fake_loss) / 2.
+                                    dis_loss_lst.append(discriminator_loss.item())
+                                    discriminator_loss.backward()
+                                    optimizer_disc.step()
+
+                                    # for epoch stats
+                                    epoch_losses.append(pred_loss.item())
+
+                                    # for sim data resource
+                                    loss_lst.append(pred_loss.item())
+
+                                    print("\tEpoch={}/{}, batch={}/{}, pred_loss={:.4f}, D loss={:.4f}, "
+                                          "G loss={:.4f}".format(epoch + 1, n_epochs, i + 1, len(data_loaders[phase]),
+                                                                 pred_loss.item(), discriminator_loss, gen_loss))
+                                else:
+                                    if str(pred_loss.item()) != "nan":  # useful in hyperparameter search
+                                        tracker.track("val_pred_loss", pred_loss.item(), tb_idx.i)
+                                        eval_dict = {}
+                                        score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
+                                                        transformers_dict[list(Xs.keys())[0]])
+                                        # for epoch stats
+                                        epoch_scores.append(score)
+
+                                        # for sim data resource
+                                        scores_lst.append(score)
+                                        for m in eval_dict:
+                                            if m in metrics_dict:
+                                                metrics_dict[m].append(eval_dict[m])
+                                            else:
+                                                metrics_dict[m] = [eval_dict[m]]
+
+                                        print("\nEpoch={}/{}, batch={}/{}, "
+                                              "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
+                                                                                        len(data_loaders[phase]),
+                                                                                        eval_dict, score))
+                                    else:
+                                        terminate_training = True
+
+                                i += 1
+                                data_size += batch_size
+                    # End of mini=batch iterations.
 
                     if phase == "train":
+                        ep_loss = np.nanmean(epoch_losses)
+                        e_avg.update(ep_loss)
+                        if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
+                            if e_avg.value > epoch_ckpt[1]:
+                                terminate_training = True
+                        print("\nPhase: {}, avg task pred_loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
 
-                        # GAN stuff
-                        f_xx, f_yy = torch.meshgrid(outputs.squeeze(), outputs.squeeze())
-                        predicted_diffs = torch.abs(f_xx - f_yy).sort(dim=1)[0][:, : neigh_dist]
-                        r_xx, r_yy = torch.meshgrid(target.squeeze(), target.squeeze())
-                        real_diffs = torch.abs(r_xx - r_yy).sort(dim=1)[0][:, :neigh_dist]
-
-                        # generator
-                        gen_loss = adversarial_loss(discriminator(predicted_diffs), valid)
-                        gen_loss_lst.append(gen_loss.item())
-                        loss = pred_loss + weighted_loss * gen_loss
-                        loss.backward()
-                        optimizer_gen.step()
-
-                        # discriminator
-                        true_loss = adversarial_loss(discriminator(real_diffs), valid)
-                        fake_loss = adversarial_loss(discriminator(predicted_diffs.detach()), fake)
-                        discriminator_loss = (true_loss + fake_loss) / 2.
-                        dis_loss_lst.append(discriminator_loss.item())
-                        discriminator_loss.backward()
-                        optimizer_disc.step()
-
-                        # for epoch stats
-                        epoch_losses.append(pred_loss.item())
-
-                        # for sim data resource
-                        loss_lst.append(pred_loss.item())
-
-                        print("\tEpoch={}/{}, batch={}/{}, pred_loss={:.4f}, D loss={:.4f}, G loss={:.4f}".format(
-                            epoch + 1, n_epochs,
-                            i + 1,
-                            len(data_loaders[phase]),
-                            pred_loss.item(),
-                            discriminator_loss,
-                            gen_loss))
+                        # Adjust the learning rate.
+                        scheduler_gen.step()
+                        scheduler_disc.step()
                     else:
-                        if str(pred_loss.item()) != "nan":  # useful in hyperparameter search
-                            eval_dict = {}
-                            score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict["gconv"])
-                            # for epoch stats
-                            epoch_scores.append(score)
-
-                            # for sim data resource
-                            scores_lst.append(score)
-                            for m in eval_dict:
-                                if m in metrics_dict:
-                                    metrics_dict[m].append(eval_dict[m])
-                                else:
-                                    metrics_dict[m] = [eval_dict[m]]
-
-                            print("\nEpoch={}/{}, batch={}/{}, "
-                                  "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
-                                                                            len(data_loaders[phase]),
-                                                                            eval_dict, score))
-
-                    i += 1
-                    data_size += batch_size
-                # End of mini=batch iterations.
-
-                if phase == "train":
-                    print("\nPhase: {}, avg task pred_loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
-                    scheduler_disc.step()
-                else:
-                    mean_score = np.mean(epoch_scores)
-                    if best_score < mean_score:
-                        best_score = mean_score
-                        best_model_wts = copy.deepcopy(generator.state_dict())
-                        best_epoch = epoch
+                        mean_score = np.mean(epoch_scores)
+                        if best_score < mean_score:
+                            best_score = mean_score
+                            best_model_wts = copy.deepcopy(generator.state_dict())
+                            best_epoch = epoch
+        except RuntimeError as e:
+            print(str(e))
 
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
-        generator.load_state_dict(best_model_wts)
+        try:
+            generator.load_state_dict(best_model_wts)
+        except RuntimeError as e:
+            print(str(e))
         return generator, best_score, best_epoch
 
     @staticmethod
@@ -570,15 +615,14 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    view = "integrated_view_gan"
-    sim_label = "CUDA={}, view={}".format(cuda, view)
-    print(sim_label)
+    sim_label = "integrated_view_gan_attn"
+    print("CUDA={}, view={}".format(cuda, sim_label))
 
     # Simulation data resource tree
     split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
         flags["cold_drug"] else "None"
     dataset_lbl = flags["dataset"]
-    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, view, split_label, "eval" if flags["eval"] else "train",
+    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
                                          date_label)
     sim_data = DataNode(label=node_label)
     nodes_list = []
@@ -587,9 +631,18 @@ def main(flags):
     num_cuda_dvcs = torch.cuda.device_count()
     cuda_devices = None if num_cuda_dvcs == 1 else [i for i in range(1, num_cuda_dvcs)]
 
+    # Runtime Protein stuff
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
+    prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
+    flags["prot_vocab_size"] = len(prot_vocab)
+    flags["protein_profile"] = prot_profile
+
+    # For searching over multiple seeds
+    hparam_search = None
 
     for seed in seeds:
+        summary_writer = SummaryWriter(log_dir="tb_runs/{}_{}/".format(sim_label, seed))
+
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
         nodes_list.append(data_node)
@@ -608,21 +661,26 @@ def main(flags):
         transformers_dict = dict()
 
         # Data
-        data_dict["gconv"] = get_data("GraphConv", flags, prot_sequences=prot_seq_dict, seed=seed)
-        transformers_dict["gconv"] = data_dict["gconv"][2]
-        data_dict["ecfp8"] = get_data("ECFP8", flags, prot_sequences=prot_seq_dict, seed=seed)
-        transformers_dict["ecfp8"] = data_dict["ecfp8"][2]
+        if use_ecfp8:
+            data_dict["ecfp8"] = get_data("ECFP8", flags, prot_sequences=prot_seq_dict, seed=seed)
+            transformers_dict["ecfp8"] = data_dict["ecfp8"][2]
+        if use_weave:
+            data_dict["weave"] = get_data("Weave", flags, prot_sequences=prot_seq_dict, seed=seed)
+            transformers_dict["weave"] = data_dict["weave"][2]
+        if use_gconv:
+            data_dict["gconv"] = get_data("GraphConv", flags, prot_sequences=prot_seq_dict, seed=seed)
+            transformers_dict["gconv"] = data_dict["gconv"][2]
 
-        tasks = data_dict["gconv"][0]
+        tasks = data_dict[list(data_dict.keys())[0]][0]
 
         trainer = IntegratedViewDTI()
 
         if flags["cv"]:
             k = flags["fold_num"]
-            print("{}, {}-Prot: Training scheme: {}-fold cross-validation".format(tasks, view, k))
+            print("{}, {}-Prot: Training scheme: {}-fold cross-validation".format(tasks, sim_label, k))
         else:
             k = 1
-            print("{}, {}-Prot: Training scheme: train, validation".format(tasks, view)
+            print("{}, {}-Prot: Training scheme: train, validation".format(tasks, sim_label)
                   + (", test split" if flags['test'] else " split"))
 
         if check_data:
@@ -639,42 +697,44 @@ def main(flags):
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
-                                    "n_iters": 3000}
+                                    "n_iters": 3000,
+                                    "tb_writer": summary_writer}
 
                 hparams_conf = get_hparam_config(flags)
+                if hparam_search is None:
+                    search_alg = {"random_search": RandomSearchCV,
+                                  "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
+                                                                            BayesianOptSearchCV)
+                    hparam_search = search_alg(hparam_config=hparams_conf,
+                                               num_folds=k,
+                                               initializer=trainer.initialize,
+                                               data_provider=trainer.data_provider,
+                                               train_fn=trainer.train,
+                                               eval_fn=trainer.evaluate,
+                                               save_model_fn=io.save_model,
+                                               init_args=extra_init_args,
+                                               data_args=extra_data_args,
+                                               train_args=extra_train_args,
+                                               data_node=data_node,
+                                               split_label=split_label,
+                                               sim_label=sim_label,
+                                               minimizer="gp",
+                                               dataset_label=dataset_lbl,
+                                               results_file="{}_{}_dti_{}.csv".format(
+                                                   flags["hparam_search_alg"], sim_label, date_label))
 
-                search_alg = {"random_search": RandomSearchCV,
-                              "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
-                                                                        BayesianOptSearchCV)
-
-                hparam_search = search_alg(hparam_config=hparams_conf,
-                                           num_folds=k,
-                                           initializer=trainer.initialize,
-                                           data_provider=trainer.data_provider,
-                                           train_fn=trainer.train,
-                                           eval_fn=trainer.evaluate,
-                                           save_model_fn=io.save_model,
-                                           init_args=extra_init_args,
-                                           data_args=extra_data_args,
-                                           train_args=extra_train_args,
-                                           data_node=data_node,
-                                           split_label=split_label,
-                                           sim_label=view,
-                                           dataset_label=dataset_lbl,
-                                           results_file="{}_{}_dti_{}.csv".format(flags["hparam_search_alg"], view,
-                                                                                  date_label))
-
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=10, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
+                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, sim_label,
+                             summary_writer)
 
     # save simulation data resource tree to file.
     sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view):
+def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, tb_writer):
     hyper_params = default_hparams_bopt(flags)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
@@ -685,34 +745,35 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
             start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                       transformers_dict, view, k)
+                       transformers_dict, view, k, tb_writer)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                   transformers_dict, view)
+                   transformers_dict, view, tb_writer)
 
 
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-               transformers_dict, view, k=None):
+               transformers_dict, view, k=None, tb_writer=None):
     data = trainer.data_provider(k, flags, data_dict)
-    model, optimizer, data_loaders, metrics, weighted_loss, neigh_dist = trainer.initialize(hparams=hyper_params,
-                                                                                            train_dataset=data["train"],
-                                                                                            val_dataset=data["val"],
-                                                                                            test_dataset=data["test"])
+    model, optimizer, data_loaders, metrics, prot_model_type, weighted_loss, neigh_dist = trainer.initialize(
+        hparams=hyper_params,
+        train_dataset=data["train"],
+        val_dataset=data["val"],
+        test_dataset=data["test"])
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model[0], flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
                                prot_desc_dict, tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, weighted_loss,
-                                            neigh_dist, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
-                                            sim_data_node=sim_data_node)
+        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_type,
+                                            weighted_loss, neigh_dist, transformers_dict, prot_desc_dict, tasks,
+                                            n_iters=10000, sim_data_node=sim_data_node, tb_writer=tb_writer)
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         io.save_model(model, flags["model_dir"],
-                   "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
-                                                  score))
+                      "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
+                                                     score))
 
 
 def default_hparams_rand(flags):
@@ -751,11 +812,11 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
-        "prot_dim": 8421,
-        "fp_dim": 1024,
-        "gconv_dim": 128,
-        "hdims": [2286, 1669, 2590],
+        "attn_heads": 4,
+        "attn_layers": 2,
+        "lin_dims": [2286, 1669],
         "disc_hdims": [724, 561],
+        "latent_dim": 512,
 
         # weight initialization
         "kaiming_constant": 5,
@@ -780,40 +841,75 @@ def default_hparams_bopt(flags):
         "optimizer_gen__adagrad__lr_decay": 0.000496165,
         "optimizer_disc": "adadelta",
         "optimizer_disc__global__weight_decay": 0.0540819,
-        "optimizer_disc__global__lr": 0.464296
+        "optimizer_disc__global__lr": 0.464296,
+
+        "prot": {
+            "model_type": "psc",
+            "in_dim": 8421,
+            "dim": 8421,
+            "vocab_size": flags["prot_vocab_size"],
+            "protein_profile": flags["protein_profile"],
+            # "hidden_dim": 128,
+        },
+        "weave": {
+            "dim": 50,
+            "update_pairs": False,
+        },
+        "gconv": {
+            "dim": 256,
+        },
+        "ecfp8": {
+            "dim": 1024,
+        }
     }
 
 
 def get_hparam_config(flags):
     return {
-        "prot_dim": ConstantParam(8421),
-        "fp_dim": ConstantParam(1024),
-        "gconv_dim": ConstantParam(128),
-        "hdims": ConstantParam([2286, 1669, 2590]),
+        "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
+        "attn_heads": CategoricalParam([1, 2, 4, 8]),
+        "attn_layers": DiscreteParam(min=1, max=4),
+        "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=2)),
+        "latent_dim": CategoricalParam(choices=[64, 128, 256, 512]),
         "disc_hdims": DiscreteParam(min=100, max=1000, size=DiscreteParam(min=1, max=2)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
 
-        "weighted_loss": LogRealParam(min=-1),
+        "weighted_loss": RealParam(0.1, max=0.5),
 
         # dropout
-        "dprob": ConstantParam(0.0519347),
-        "disc_dprob": LogRealParam(min=-2),
+        "dprob": RealParam(0.1, max=0.5),
+        # "disc_dprob": RealParam(0.1, max=0.5),
         "neigh_dist": DiscreteParam(min=5, max=20),
 
-        "tr_batch_size": ConstantParam(256),
-        "val_batch_size": ConstantParam(512),
-        "test_batch_size": ConstantParam(512),
+        "tr_batch_size": CategoricalParam(choices=[64, 128, 256]),
+        "val_batch_size": ConstantParam(128),
+        "test_batch_size": ConstantParam(128),
 
         # optimizer params
-        "optimizer_gen": ConstantParam("adagrad"),
-        "optimizer_gen__global__weight_decay": ConstantParam(0.00312756),
-        "optimizer_gen__global__lr": ConstantParam(0.000867065),
-        "optimizer_gen__adagrad__lr_decay": ConstantParam(0.000496165),
+        "optimizer_gen": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
+        "optimizer_gen__global__weight_decay": LogRealParam(),
+        "optimizer_gen__global__lr": LogRealParam(),
         "optimizer_disc": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer_disc__global__weight_decay": LogRealParam(),
         "optimizer_disc__global__lr": LogRealParam(),
+
+        "prot": DictParam({
+            "model_type": ConstantParam("psc"),
+            "in_dim": ConstantParam(8421),
+            "dim": ConstantParam(8421),
+        }),
+        "weave": DictParam({
+            # "dim": DiscreteParam(min=64, max=512),
+            "update_pairs": ConstantParam(False),
+        }),
+        "gconv": DictParam({
+            "dim": DiscreteParam(min=64, max=512),
+        }),
+        "ecfp8": DictParam({
+            "dim": ConstantParam(1024),
+        })
 
     }
 
@@ -833,6 +929,15 @@ def verify_multiview_data(data_dict):
         print('#' * 100)
         corr.append(ecfp8 == gconv)
     print(corr)
+
+
+class Flags(object):
+    # enables using either object referencing or dict indexing to retrieve user passed arguments of flag objects.
+    def __getitem__(self, item):
+        return self.__dict__[item]
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
 
 
 if __name__ == '__main__':
@@ -902,11 +1007,14 @@ if __name__ == '__main__':
                         action='append',
                         help='A list containing paths to protein descriptors.'
                         )
-    # parser.add_argument('--seed',
-    #                     type=int,
-    #                     action="append",
-    #                     default=[123, 124, 125],
-    #                     help='Random seeds to be used.')
+    parser.add_argument('--prot_profile',
+                        type=str,
+                        help='A resource for retrieving embedding indexing profile of proteins.'
+                        )
+    parser.add_argument('--prot_vocab',
+                        type=str,
+                        help='A resource containing all N-gram segments/words constructed from the protein sequences.'
+                        )
     parser.add_argument('--no_reload',
                         action="store_false",
                         dest='reload',
@@ -932,28 +1040,9 @@ if __name__ == '__main__':
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
 
     args = parser.parse_args()
-
-    FLAGS = dict()
-    FLAGS['dataset'] = args.dataset
-    FLAGS['fold_num'] = args.fold_num
-    FLAGS['cv'] = True if FLAGS['fold_num'] > 2 else False
-    FLAGS['test'] = args.test
-    FLAGS['splitting_alg'] = args.splitting_alg
-    FLAGS['filter_threshold'] = args.filter_threshold
-    FLAGS['cold_drug'] = args.cold_drug
-    FLAGS['cold_target'] = args.cold_target
-    FLAGS['cold_drug_cluster'] = args.cold_drug_cluster
-    FLAGS['predict_cold'] = args.predict_cold
-    FLAGS['model_dir'] = args.model_dir
-    FLAGS['model_name'] = args.model_name
-    FLAGS['prot_desc_path'] = args.prot_desc_path
-    # FLAGS['seeds'] = args.seed
-    FLAGS['reload'] = args.reload
-    FLAGS['data_dir'] = args.data_dir
-    FLAGS['split_warm'] = args.split_warm
-    FLAGS['hparam_search'] = args.hparam_search
-    FLAGS["hparam_search_alg"] = args.hparam_search_alg
-    FLAGS["eval"] = args.eval
-    FLAGS["eval_model_name"] = args.eval_model_name
-
-    main(flags=FLAGS)
+    flags = Flags()
+    args_dict = args.__dict__
+    for arg in args_dict:
+        setattr(flags, arg, args_dict[arg])
+    setattr(flags, "cv", True if flags.fold_num > 2 else False)
+    main(flags)
