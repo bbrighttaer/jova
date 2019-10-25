@@ -40,7 +40,8 @@ from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.math import ExpAverage, Count
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.tb import TBMeanTracker
-from ivpgan.utils.train_helpers import count_parameters, load_pickle, GradStats
+from ivpgan.utils.train_helpers import count_parameters, GradStats, create_torch_embeddings, FrozenModels
+from ivpgan.utils.io import load_pickle, load_numpy_array
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -62,22 +63,17 @@ def create_ecfp_net(hparams):
     return model
 
 
-def create_prot_net(hparams):
+def create_prot_net(hparams, frozen_models_hook=None):
     if hparams["prot"]["model_type"].lower() == "rnn":
+        pt_embeddings = create_torch_embeddings(frozen_models_hook, hparams["prot"]["protein_embeddings"])
         model = ProteinRNN(protein_profile=hparams["prot"]["protein_profile"],
-                           vocab_size=hparams["prot"]["vocab_size"],
-                           embedding_dim=hparams["prot"]["dim"],
+                           embeddings=pt_embeddings,
                            hidden_dim=hparams["prot"]["hidden_dim"],
                            dropout=hparams["dprob"])
     elif hparams["prot"]["model_type"].lower() == "p2v":
-        model = Prot2Vec(protein_profile=hparams["prot"]["protein_profile"],
-                         vocab_size=hparams["prot"]["vocab_size"],
-                         embedding_dim=hparams["prot"]["dim"])
+        pt_embeddings = create_torch_embeddings(frozen_models_hook, hparams["prot"]["protein_embeddings"])
+        model = Prot2Vec(protein_profile=hparams["prot"]["protein_profile"], embeddings=pt_embeddings)
     else:
-        # model = nn.Sequential(nn.Linear(hparams["prot"]["in_dim"], hparams["prot"]["dim"]),
-        #                       nn.BatchNorm1d(hparams["prot"]["dim"]),
-        #                       NonsatActivation(),
-        #                       Unsqueeze(dim=1))
         model = nn.Sequential(Unsqueeze(dim=0))
     return model
 
@@ -141,6 +137,9 @@ def create_gconv_net(hparams):
 
 
 def create_integrated_net(hparams):
+    # Convenient way of keeping track of models to be frozen during (or at the initial stages) training.
+    frozen_models = FrozenModels()
+
     # N-way forward propagation
     views = {}
 
@@ -151,15 +150,14 @@ def create_integrated_net(hparams):
     if use_gconv:
         views["gconv"] = create_gconv_net(hparams)
     if use_prot:
-        views["prot"] = create_prot_net(hparams)
+        views["prot"] = create_prot_net(hparams, frozen_models)
 
     layers = [NwayForward(models=views.values())]
 
     seg_dims = [hparams[c]["dim"] for c in views.keys()]
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
-                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"],
-                                 inner_layer_dim=hparams["inner_layer_dim"]))
+                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
 
     p = len(views) * hparams["latent_dim"]
     for dim in hparams["lin_dims"]:
@@ -175,7 +173,7 @@ def create_integrated_net(hparams):
     # Build model
     model = nn.Sequential(*layers)
 
-    return model
+    return model, frozen_models
 
 
 class IntegratedViewDTI(Trainer):
@@ -184,7 +182,7 @@ class IntegratedViewDTI(Trainer):
     def initialize(hparams, train_dataset, val_dataset, test_dataset, cuda_devices=None, mode="regression"):
 
         # create networks
-        model = create_integrated_net(hparams)
+        model, frozen_models = create_integrated_net(hparams)
         print("Number of trainable parameters: model={}".format(count_parameters(model)))
         if cuda:
             model = model.cuda()
@@ -233,7 +231,7 @@ class IntegratedViewDTI(Trainer):
                    mt.Metric(mt.concordance_index, np.nanmean),
                    mt.Metric(mt.pearson_r2_score, np.nanmean)]
         return model, optimizer, {"train": train_data_loader, "val": val_data_loader,
-                                  "test": test_data_loader}, metrics, hparams["prot"]["model_type"]
+                                  "test": test_data_loader}, metrics, hparams["prot"]["model_type"], frozen_models
 
     @staticmethod
     def data_provider(fold, flags, data_dict):
@@ -274,8 +272,8 @@ class IntegratedViewDTI(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, model, optimizer, data_loaders, metrics, prot_model_type, transformers_dict, prot_desc_dict,
-              tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None):
+    def train(eval_fn, model, optimizer, data_loaders, metrics, prot_model_type, frozen_models, transformers_dict,
+              prot_desc_dict, tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None):
         tb_writer = tb_writer()
         start = time.time()
         best_model_wts = model.state_dict()
@@ -314,6 +312,10 @@ class IntegratedViewDTI(Trainer):
                     print("Terminating training...")
                     break
                 for phase in ["train", "val"]:
+                    # ensure these models are frozen at all times
+                    for m in frozen_models:
+                        m.eval()
+
                     if phase == "train":
                         print("Training....")
                         # Adjust the learning rate.
@@ -384,8 +386,6 @@ class IntegratedViewDTI(Trainer):
                                     fake = torch.zeros_like(target).float()
                                     if cuda:
                                         target = target.cuda()
-                                        valid = valid.cuda()
-                                        fake = fake.cuda()
                                     loss = prediction_criterion(outputs, target)
 
                                 if phase == "train":
@@ -411,6 +411,12 @@ class IntegratedViewDTI(Trainer):
                                         eval_dict = {}
                                         score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
                                                         transformers_dict[list(Xs.keys())[0]])
+
+                                        # TBoard info
+                                        tracker.track('val/score', score, tb_idx.i)
+                                        for k in eval_dict:
+                                            tracker.track('val/{}'.format(k), eval_dict[k], tb_idx.i)
+
                                         # for epoch stats
                                         epoch_scores.append(score)
 
@@ -570,8 +576,11 @@ def main(flags):
     # Runtime Protein stuff
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
     prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
+    pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
     flags["prot_vocab_size"] = len(prot_vocab)
     flags["protein_profile"] = prot_profile
+    flags["protein_embeddings"] = pretrained_embeddings
+    flags["embeddings_dim"] = 100
 
     # For searching over multiple seeds
     hparam_search = None
@@ -644,7 +653,7 @@ def main(flags):
                     search_alg = {"random_search": RandomSearchCV,
                                   "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
                                                                             BayesianOptSearchCV)
-                    min_opt = "gbrt"
+                    min_opt = "gp"
                     hparam_search = search_alg(hparam_config=hparams_conf,
                                                num_folds=k,
                                                initializer=trainer.initialize,
@@ -663,7 +672,7 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
@@ -694,18 +703,17 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer, transformers_dict, view,
                k=None, tb_writer=None):
     data = trainer.data_provider(k, flags, data_dict)
-    model, optimizer, data_loaders, metrics, prot_model_type = trainer.initialize(hparams=hyper_params,
-                                                                                  train_dataset=data["train"],
-                                                                                  val_dataset=data["val"],
-                                                                                  test_dataset=data["test"])
+    model, optimizer, data_loaders, metrics, \
+    prot_model_type, frozen_models = trainer.initialize(hparams=hyper_params, train_dataset=data["train"],
+                                                        val_dataset=data["val"], test_dataset=data["test"])
     if flags["eval"]:
-        trainer.evaluate_model(trainer.evaluate, model[0], flags["model_dir"], flags["eval_model_name"],
+        trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict, prot_desc_dict,
                                tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
         model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_type,
-                                            transformers_dict, prot_desc_dict, tasks, n_iters=10000,
+                                            frozen_models, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
                                             sim_data_node=sim_data_node, tb_writer=tb_writer)
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
@@ -776,45 +784,44 @@ def default_hparams_bopt(flags):
     ------------|---------------------------------------------------------------------------
     rnn         | Uses embeddings and an RNN variant (e.g. LSTM) to learn protein features.
     ------------|---------------------------------------------------------------------------
+    NOTE: The p2v and rnn model types require pretrained protein embeddings.
     """
-    prot_model = "psc"
+    prot_model = "p2v"
     return {
         "attn_heads": 8,
         "attn_layers": 1,
-        "lin_dims": [1937, 445, 64],
+        "lin_dims": [2048, 911, 64],
         "latent_dim": 256,
-        "inner_layer_dim": 2048,
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout
-        "dprob": 0.13,
+        "dprob": 0.1,
 
-        "tr_batch_size": 256,
+        "tr_batch_size": 16,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "adam",
-        "optimizer__global__weight_decay": 0.0001,
-        # "optimizer__global__lr": 0.000867065,
+        "optimizer__global__weight_decay": 0.00016805292000620113,
         "optimizer__global__lr": 0.0001,
-        # "optimizer__adagrad__lr_decay": 0.000496165,
         "prot": {
             "model_type": prot_model,
             "in_dim": 8421,
-            "dim": 8421 if prot_model == "psc" else 10,
+            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
             "vocab_size": flags["prot_vocab_size"],
             "protein_profile": flags["protein_profile"],
-            # "hidden_dim": 128,
+            "rnn_hidden_dim": 128,
+            "protein_embeddings": flags["protein_embeddings"]
         },
         "weave": {
             "dim": 50,
             "update_pairs": False,
         },
         "gconv": {
-            "dim": 487,
+            "dim": 512,
         },
         "ecfp8": {
             "dim": 1024,
@@ -828,8 +835,7 @@ def get_hparam_config(flags):
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
         "attn_layers": DiscreteParam(min=1, max=3),
         "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
-        "latent_dim": CategoricalParam(choices=[64, 128, 256, 512]),
-        "inner_layer_dim": CategoricalParam([64, 128, 256, 512, 1024, 2048]),
+        "latent_dim": CategoricalParam(choices=[256, 512]),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
@@ -837,7 +843,7 @@ def get_hparam_config(flags):
         # dropout
         "dprob": RealParam(0.1, max=0.5),
 
-        "tr_batch_size": CategoricalParam(choices=[64, 128, 256]),
+        "tr_batch_size": CategoricalParam(choices=[128, 256]),
         "val_batch_size": ConstantParam(128),
         "test_batch_size": ConstantParam(128),
 
@@ -973,6 +979,11 @@ if __name__ == '__main__':
     parser.add_argument('--prot_vocab',
                         type=str,
                         help='A resource containing all N-gram segments/words constructed from the protein sequences.'
+                        )
+    parser.add_argument('--prot_embeddings',
+                        type=str,
+                        dest="protein_embeddings",
+                        help='Numpy array file containing the pretrained protein "words" embeddings'
                         )
     parser.add_argument('--no_reload',
                         action="store_false",

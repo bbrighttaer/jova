@@ -9,12 +9,15 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import unicode_literals
 
+import pickle
+
 __author__ = 'Brighter Agyemang'
 
 import os
 import logging
 import sys
 import torch
+import numpy as np
 
 
 def get_logger(name=None, level='INFO', stream='stderr', filename=None, log_dir='./logs/'):
@@ -74,3 +77,12 @@ def load_model(path, name):
     :return: The saved state_dict.
     """
     return torch.load(os.path.join(path, name), map_location=torch.device("cuda:0"))
+
+
+def load_pickle(file_name):
+    with open(file_name, 'rb') as f:
+        return pickle.load(f)
+
+
+def load_numpy_array(file_name):
+    return np.load(file_name, allow_pickle=True)

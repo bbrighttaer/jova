@@ -12,7 +12,6 @@ from __future__ import unicode_literals
 
 import gzip
 import os
-import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -124,10 +123,6 @@ def load_gzip_pickle(f):
         ret = thepickle.load(f)
 
     return ret
-
-def load_pickle(file_name):
-    with open(file_name, 'rb') as f:
-        return pickle.load(f)
 
 
 def make_numpy_array(data_xy):
@@ -277,3 +272,44 @@ def get_activation_func(activation):
             'softmax': torch.nn.Softmax(),
             'elu': torch.nn.ELU(),
             'nonsat': NonsatActivation()}.get(activation.lower(), torch.nn.ReLU())
+
+
+class FrozenModels(object):
+
+    def __init__(self):
+        self._models = []
+
+    @property
+    def models(self):
+        return self._models
+
+    @models.setter
+    def models(self, m):
+        self._models = m
+
+    def clear(self):
+        self._models.clear()
+
+    def __iter__(self):
+        for model in self._models:
+            yield model
+
+    def add_model(self, model):
+        self._models.append(model)
+
+    def unfreeze(self):
+        for model in self._models:
+            model.train()
+
+    def freeze(self):
+        for model in self._models:
+            model.eval()
+
+
+def create_torch_embeddings(frozen_models_hook, np_embeddings):
+    pretrained_embeddings = torch.from_numpy(np_embeddings.astype(np.float)).float()
+    shape = pretrained_embeddings.shape
+    pt_embeddings = torch.nn.Embedding(num_embeddings=shape[0], embedding_dim=shape[1], _weight=pretrained_embeddings)
+    if frozen_models_hook:
+        frozen_models_hook.add_model(pt_embeddings)
+    return pt_embeddings

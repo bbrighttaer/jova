@@ -26,7 +26,7 @@ def split_sequence(sequence, ngram, vocab_dict):
     return np.array(words)
 
 
-def split_sequence_with_offset(sequence, ngram=3, offsets=(0,)):
+def create_words(sequence, ngram=3, offsets=(0,)):
     all_words = []
     for offset in offsets:
         words = [sequence[i:i + ngram]
@@ -35,9 +35,25 @@ def split_sequence_with_offset(sequence, ngram=3, offsets=(0,)):
     return all_words
 
 
-def dump_binary(dictionary, filename, clazz):
+def split_sequence_overlapping(sequence, ngram=3):
+    words = [sequence[i:i + ngram]
+             for i in range(len(sequence) - ngram + 1)]
+    return words
+
+
+def create_protein_profile(vocab, words):
+    profile = [vocab[w] for w in words]
+    return np.array(profile)
+
+
+def dump_binary(obj, filename, clazz):
     with open(filename, 'wb') as f:
-        pickle.dump(clazz(dictionary), f)
+        pickle.dump(clazz(obj), f)
+
+
+def load_binary(filename):
+    with open(filename, 'rb') as f:
+        return pickle.load(f)
 
 
 if __name__ == '__main__':
@@ -55,14 +71,14 @@ if __name__ == '__main__':
     parser.add_argument('--verbose',
                         action='store_true',
                         help='Prints every entry being processed')
-    parser.add_argument('--ds_folder',
+    parser.add_argument('--vocab',
                         type=str,
-                        dest='dataset',
-                        help='Dataset folder to store the files')
+                        required=True,
+                        help='The file containing protein words (keys) and their index (values) '
+                             'in the ProtVec embeddings')
     args = parser.parse_args()
 
-    word_dict = defaultdict(lambda: len(word_dict))
-    words = []
+    word_dict = load_binary(args.vocab)
     proteins = {}
 
     for file in args.prot_files:
@@ -73,11 +89,10 @@ if __name__ == '__main__':
             sequence = row[2]
             if args.verbose:
                 print("Label={}, Sequence={}".format(label, sequence))
-            protein_profile = split_sequence(sequence, args.ngram, word_dict)
-            words += split_sequence_with_offset(sequence, args.ngram, offsets=(0, 1, 2))
+            words = split_sequence_overlapping(sequence, args.ngram)
+            protein_profile = create_protein_profile(word_dict, words)
             proteins[label] = protein_profile
     print("Saving files...")
-    dump_binary(proteins, '../../data/{}/proteins.profile'.format(args.dataset), dict)
-    dump_binary(word_dict, '../../data/{}/proteins.vocab'.format(args.dataset), dict)
-    dump_binary(words, '../../data/{}/words.list'.format(args.dataset), set)
+    dump_binary(proteins, '../../data/protein/proteins.profile', dict)
+    # dump_binary(word_dict, '../../data/protein/proteins.vocab', dict)
     print("Info: vocab size={}, protein profiles saved={}".format(len(word_dict), len(proteins)))

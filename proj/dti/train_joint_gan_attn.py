@@ -40,7 +40,8 @@ from ivpgan.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
 from ivpgan.utils.math import ExpAverage, Count
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.tb import TBMeanTracker
-from ivpgan.utils.train_helpers import count_parameters, GradStats, load_pickle
+from ivpgan.utils.train_helpers import count_parameters, GradStats
+from ivpgan.utils.io import load_pickle
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")

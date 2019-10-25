@@ -556,19 +556,20 @@ class Projector(nn.Module):
 
 class ProteinRNN(nn.Module):
 
-    def __init__(self, protein_profile, vocab_size, embedding_dim, hidden_dim, dropout, num_layers=1,
-                 bidrectional=False, activation='nonsat'):
+    def __init__(self, protein_profile, embeddings, hidden_dim, dropout, num_layers=1,
+                 bidrectional=False, activation='nonsat', batch_first=False):
         super(ProteinRNN, self).__init__()
         self.protein_profile = protein_profile
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.directions = max(1, int(bidrectional) + 1)
         self.activation = get_activation_func(activation)
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.embeddings = embeddings
+        self.embedding_dim = embeddings.weight.shape[0]
         if num_layers == 1:
             dropout = 0
-        self.model = nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True,
-                             dropout=dropout, bidirectional=bidrectional)
+        self.model = nn.LSTM(input_size=self.embedding_dim, hidden_size=hidden_dim, num_layers=num_layers,
+                             batch_first=batch_first, dropout=dropout, bidirectional=bidrectional)
 
     def forward(self, input):
         # retrieve protein embedding profiles
@@ -577,10 +578,10 @@ class ProteinRNN(nn.Module):
         # pad sequences
         max_seq = max([len(p) for p in x])
         x = [vec + [0] * (max_seq - len(vec)) for vec in x]
-        x = torch.tensor(x, dtype=torch.long).to(self.embedding.weight.device)
+        x = torch.tensor(x, dtype=torch.long).to(self.embeddings.weight.device)
 
         # get protein embeddings
-        embeds = self.embedding(x)
+        embeds = self.embeddings(x)
 
         # RNN initial states
         # (layer_dim * num_directions, batch_size, hidden_dim)
@@ -595,11 +596,11 @@ class ProteinRNN(nn.Module):
 
 class Prot2Vec(nn.Module):
 
-    def __init__(self, protein_profile, vocab_size, embedding_dim, activation='relu'):
+    def __init__(self, protein_profile, embeddings, activation='relu'):
         super(Prot2Vec, self).__init__()
         self.protein_profile = protein_profile
+        self.embedding = embeddings
         self.activation = get_activation_func(activation)
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
 
     def forward(self, input):
         # retrieve protein embedding profiles
@@ -675,8 +676,7 @@ class JointAttention(nn.Module):
         self.attention_models = nn.ModuleList([nn.MultiheadAttention(embed_dim=self.latent_dim,
                                                                      num_heads=num_heads, dropout=dprob)
                                                for _ in range(num_layers)])
-        self.res_blks = nn.ModuleList([SegmentWiseResBlock(d_model=latent_dim, dropout=dprob,
-                                                           activation=activation,
+        self.res_blks = nn.ModuleList([SegmentWiseResBlock(d_model=latent_dim, activation=activation,
                                                            inner_layer_dim=inner_layer_dim) for _ in range(num_layers)])
         self.activation = get_activation_func(activation)
         self.dropout = nn.Dropout(dprob)
@@ -719,7 +719,7 @@ class JointAttention(nn.Module):
             # self-attention - sub-module 1
             x_prime, wts = attn_net(x, x, x)
             x_add = x + x_prime
-            x = self.dropout(self.activation(self.attn_bn(x_add.view(shape[0] * shape[1], shape[2]))))
+            x = self.attn_bn(x_add.view(shape[0] * shape[1], shape[2]))
             x = x.view(*shape)
 
             # FFN res block - sub-module 2
@@ -766,12 +766,10 @@ class SegmentWiseLinear(nn.Module):
 
 class SegmentWiseResBlock(nn.Module):
 
-    def __init__(self, d_model, activation='relu', dropout=0.0, inner_layer_dim=2048):
+    def __init__(self, d_model, activation='relu', inner_layer_dim=2048):
         super(SegmentWiseResBlock, self).__init__()
         self.batch_norm = nn.BatchNorm1d(d_model)
         self.seg_lin = SegmentWiseLinear(d_model, activation, inner_layer_dim)
-        self.activation = get_activation_func(activation)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         """
@@ -781,6 +779,5 @@ class SegmentWiseResBlock(nn.Module):
         """
         num_seg, bsize, d_model = x.shape
         x = x + self.seg_lin(x)
-        x = self.dropout(self.activation(self.batch_norm(x.view(num_seg * bsize, d_model)))).view(num_seg, bsize,
-                                                                                                  d_model)
+        x = self.batch_norm(x.view(num_seg * bsize, d_model)).view(num_seg, bsize, d_model)
         return x
