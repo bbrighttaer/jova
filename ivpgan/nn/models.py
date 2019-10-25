@@ -781,3 +781,54 @@ class SegmentWiseResBlock(nn.Module):
         x = x + self.seg_lin(x)
         x = self.batch_norm(x.view(num_seg * bsize, d_model)).view(num_seg, bsize, d_model)
         return x
+
+
+class ProtCNN(nn.Module):
+    """
+    Implementation of the Protein CNN presented in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+    """
+
+    def __init__(self, protein_profile, embeddings, activation='relu', window=11, num_layers=3):
+        super(ProtCNN, self).__init__()
+        self.embeddings = embeddings
+        self.activation = activation
+        self.protein_profile = protein_profile
+        self.window = window
+        self.dim = embeddings.weight.shape[1]
+        self.num_layers = num_layers
+        self.W_cnn = nn.ModuleList([nn.Conv2d(in_channels=1, out_channels=1, kernel_size=2 * window + 1,
+                                              stride=1, padding=window) for _ in range(num_layers)])
+        self.W_attention = nn.Linear(self.dim, self.dim)
+
+    def forward(self, prot_x, comp_x):
+        pass
+
+
+class ProtCnnForward(nn.Module):
+    """
+    Helper forward propagation module for :class:ProtCNN
+    """
+
+    def __init__(self, prot_cnn_model, comp_model):
+        """
+        Note: The final dimension of the proteins and compounds must be equal.
+        :param prot_cnn_model:
+        :param comp_model:
+        """
+        super(ProtCnnForward, self).__init__()
+        self.pcnn = prot_cnn_model
+        self.gnet = comp_model
+
+    def forward(self, prot_input, comp_input):
+        """
+        First get the compound representations and then forward them to the protein CNN.
+        This is necessary since the compound features are used in the ProtCNN attention weights calculation.
+
+        :param prot_input:
+        :param comp_input:
+        :return:
+        """
+        comp_out = self.gnet(comp_input)
+        prot_out = self.pcnn(prot_input, comp_out)
+        out = torch.cat([comp_out, prot_out], dim=1)
+        return out

@@ -389,7 +389,7 @@ class IntegratedViewDTI(Trainer):
                                     loss = prediction_criterion(outputs, target)
 
                                 if phase == "train":
-                                    tracker.track("train_pred_loss", loss.item(), tb_idx.IncAndGet())
+                                    tracker.track("train/train_pred_loss", loss.item(), tb_idx.IncAndGet())
 
                                     # backward pass
                                     loss.backward()
@@ -407,7 +407,7 @@ class IntegratedViewDTI(Trainer):
                                         len(data_loaders[phase]), loss.item()))
                                 else:
                                     if str(loss.item()) != "nan":  # useful in hyperparameter search
-                                        tracker.track("val_pred_loss", loss.item(), tb_idx.i)
+                                        tracker.track("val/val_pred_loss", loss.item(), tb_idx.i)
                                         eval_dict = {}
                                         score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
                                                         transformers_dict[list(Xs.keys())[0]])
@@ -799,7 +799,7 @@ def default_hparams_bopt(flags):
         # dropout
         "dprob": 0.1,
 
-        "tr_batch_size": 16,
+        "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
