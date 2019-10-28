@@ -449,6 +449,8 @@ class IntegratedViewDTI(Trainer):
                                     gen_loss = adversarial_loss(discriminator(predicted_diffs), valid)
                                     gen_loss_lst.append(gen_loss.item())
                                     loss = pred_loss + weighted_loss * gen_loss
+                                    tracker.track("train/gan/gen_loss", gen_loss.item(), tb_idx.i)
+                                    tracker.track("train/gan/comp_loss", loss.item(), tb_idx.i)
                                     loss.backward()
                                     optimizer_gen.step()
 
@@ -456,6 +458,7 @@ class IntegratedViewDTI(Trainer):
                                     true_loss = adversarial_loss(discriminator(real_diffs), valid)
                                     fake_loss = adversarial_loss(discriminator(predicted_diffs.detach()), fake)
                                     discriminator_loss = (true_loss + fake_loss) / 2.
+                                    tracker.track("train/gan/disc_loss", discriminator_loss.item(), tb_idx.i)
                                     dis_loss_lst.append(discriminator_loss.item())
                                     discriminator_loss.backward()
                                     optimizer_disc.step()
@@ -711,7 +714,7 @@ def main(flags):
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
-                                    "n_iters": 3000,
+                                    "n_iters": 4000,
                                     "tb_writer": summary_writer_creator}
 
                 hparams_conf = get_hparam_config(flags)
@@ -733,7 +736,7 @@ def main(flags):
                                                data_node=data_node,
                                                split_label=split_label,
                                                sim_label=sim_label,
-                                               minimizer="gp",
+                                               minimizer=min_opt,
                                                dataset_label=dataset_lbl,
                                                results_file="{}_{}_dti_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))

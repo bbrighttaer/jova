@@ -1,8 +1,8 @@
 # Author: bbrighttaer
 # Project: ivpgan
-# Date: 7/2/19
-# Time: 1:24 PM
-# File: singleview.py
+# Date: 10/28/19
+# Time: 10:13am
+# File: cpi_baseline.py
 
 from __future__ import absolute_import
 from __future__ import division
@@ -31,42 +31,33 @@ from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalP
 from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, ConcatLayer
-from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential
+from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential, ProtCNN, ProtCnnForward
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
-from ivpgan.utils.io import load_model, save_model
+from ivpgan.utils.io import load_model, save_model, load_pickle, load_numpy_array
 from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters
+from ivpgan.utils.train_helpers import count_parameters, create_torch_embeddings, FrozenModels
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 seeds = [123, 124, 125]
 
-
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
-# cuda = torch.cuda.is_available()
-# torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 
 def create_ecfp_net(hparams):
-    civ_dim = hparams["prot_dim"] + hparams["comp_dim"]
     fcn_args = []
-    p = civ_dim
-    layers = hparams["hdims"]
-    if not isinstance(layers, list):
-        layers = [layers]
-    for dim in layers:
-        conf = FcnArgs(in_features=p,
-                       out_features=dim,
+    for i in range(len(hparams["ecfp"]["ecfp_hdims"]) - 1):
+        conf = FcnArgs(in_features=hparams["ecfp"]["ecfp_hdims"][i],
+                       out_features=hparams["ecfp"]["ecfp_hdims"][i + 1],
                        activation='relu',
                        batch_norm=True,
                        dropout=hparams["dprob"])
         fcn_args.append(conf)
-        p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
-    layers = [ConcatLayer(dim=1)] + create_fcn_layers(fcn_args)
-    model = nn.Sequential(*layers)
+    fcn_args.append(FcnArgs(in_features=hparams["ecfp"]["ecfp_hdims"][-1], out_features=hparams["latent_dim"]))
+    fcn_args.append(FcnArgs(in_features=hparams["latent_dim"], out_features=1))
+    model = nn.Sequential(*create_fcn_layers(fcn_args))
     return model
 
 
@@ -74,58 +65,38 @@ def create_weave_net(hparams):
     weave_args = (
         WeaveLayerArgs(n_atom_input_feat=75,
                        n_pair_input_feat=14,
-                       n_atom_output_feat=50,
+                       n_atom_output_feat=hparams["weave"]["dim"],
                        n_pair_output_feat=50,
                        n_hidden_AA=50,
                        n_hidden_PA=50,
                        n_hidden_AP=50,
                        n_hidden_PP=50,
-                       update_pair=True,
+                       update_pair=hparams["weave"]["update_pairs"],
                        activation='relu',
                        batch_norm=True,
                        dropout=hparams["dprob"]
                        ),
         WeaveLayerArgs(n_atom_input_feat=50,
-                       n_pair_input_feat=50,
-                       n_atom_output_feat=50,
+                       n_pair_input_feat=14,
+                       n_atom_output_feat=hparams["weave"]["dim"],
                        n_pair_output_feat=50,
                        n_hidden_AA=50,
                        n_hidden_PA=50,
                        n_hidden_AP=50,
                        n_hidden_PP=50,
-                       update_pair=True,
+                       update_pair=hparams["weave"]["update_pairs"],
                        batch_norm=True,
                        dropout=hparams["dprob"],
                        activation='relu'),
     )
-    wg_args = WeaveGatherArgs(conv_out_depth=50, gaussian_expand=True, n_depth=128)
-    weave_model = WeaveModel(weave_args, wg_args)
-
-    # FCN
-    civ_dim = hparams["prot_dim"] + 128
-    fcn_args = []
-    p = civ_dim
-    fcn_layers = hparams["hdims"]
-    if not isinstance(fcn_layers, list):
-        fcn_layers = [fcn_layers]
-    for dim in fcn_layers:
-        conf = FcnArgs(in_features=p,
-                       out_features=dim,
-                       activation='relu',
-                       batch_norm=True,
-                       dropout=hparams["dprob"])
-        fcn_args.append(conf)
-        p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
-    fcn_layers = create_fcn_layers(fcn_args)
-
-    model = nn.Sequential(PairSequential(mod1=(weave_model,),
-                                         mod2=(nn.Identity(),)),
-                          *fcn_layers)
-    return model
+    wg_args = WeaveGatherArgs(conv_out_depth=hparams["weave"]["dim"],
+                              gaussian_expand=True, n_depth=hparams["latent_dim"])
+    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='1D')
+    return weave_model
 
 
 def create_gconv_net(hparams):
+    dim = hparams["gconv"]["dim"]
     gconv_model = GraphConvSequential(GraphConvLayer(in_dim=75, out_dim=64),
                                       nn.BatchNorm1d(64),
                                       nn.ReLU(),
@@ -136,47 +107,50 @@ def create_gconv_net(hparams):
                                       nn.ReLU(),
                                       GraphPool(),
 
-                                      nn.Linear(in_features=64, out_features=128),
-                                      nn.BatchNorm1d(128),
+                                      nn.Linear(in_features=64, out_features=dim),
+                                      nn.BatchNorm1d(dim),
                                       nn.ReLU(),
                                       nn.Dropout(hparams["dprob"]),
-                                      GraphGather())
-    # FCN
-    civ_dim = hparams["prot_dim"] + 128 * 2
-    fcn_args = []
-    p = civ_dim
-    fcn_layers = hparams["hdims"]
-    if not isinstance(fcn_layers, list):
-        fcn_layers = [fcn_layers]
-    for dim in fcn_layers:
-        conf = FcnArgs(in_features=p,
-                       out_features=dim,
-                       activation='relu',
-                       batch_norm=True,
-                       dropout=hparams["dprob"])
-        fcn_args.append(conf)
-        p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
-    fcn_layers = create_fcn_layers(fcn_args)
-
-    model = nn.Sequential(PairSequential(mod1=(gconv_model,),
-                                         mod2=(nn.Identity(),)),
-                          *fcn_layers)
-
-    return model
+                                      GraphGather(activation='tanh'))
+    return nn.Sequential(gconv_model, nn.Linear(dim * 2, hparams["latent_dim"]),
+                         nn.BatchNorm1d(hparams["latent_dim"]), nn.ReLU())
 
 
 class SingleViewDTI(Trainer):
 
     @staticmethod
     def initialize(hparams, train_dataset, val_dataset, test_dataset, cuda_devices=None, mode="regression"):
+        frozen_models = FrozenModels()
 
         # create network
-        create_func = {"ecfp4": create_ecfp_net,
-                       "ecfp8": create_ecfp_net,
-                       "weave": create_weave_net,
-                       "gconv": create_gconv_net}.get(hparams["view"])
-        model = create_func(hparams)
+        view_lbl = hparams["view"]
+        create_comp_model = {"ecfp4": create_ecfp_net,
+                             "ecfp8": create_ecfp_net,
+                             "weave": create_weave_net,
+                             "gconv": create_gconv_net}.get(view_lbl)
+        comp_model = create_comp_model(hparams)
+        pt_embeddings = create_torch_embeddings(frozen_models_hook=frozen_models,
+                                                np_embeddings=hparams["prot"]["protein_embeddings"])
+        prot_model = ProtCNN(protein_profile=hparams["prot"]["protein_profile"],
+                             embeddings=pt_embeddings,
+                             window=hparams["cpi_baseline"]["window"],
+                             num_layers=hparams["cpi_baseline"]["num_layers"])
+        comp_net_pcnn = ProtCnnForward(prot_cnn_model=prot_model, comp_model=comp_model)
+
+        p = 2 * hparams["latent_dim"]
+        layers = [comp_net_pcnn]
+        for dim in hparams["hdims"]:
+            layers.append(nn.Linear(p, dim))
+            layers.append(nn.BatchNorm1d(dim))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(hparams["dprob"]))
+            p = dim
+
+        # Output layer
+        layers.append(nn.Linear(in_features=p, out_features=1))
+
+        model = nn.Sequential(*layers)
+
         print("Number of trainable parameters = {}".format(count_parameters(model)))
         if cuda:
             model = model.cuda()
@@ -226,7 +200,7 @@ class SingleViewDTI(Trainer):
                    mt.Metric(mt.pearson_r2_score, np.nanmean)]
         return model, optimizer, {"train": train_data_loader,
                                   "val": val_data_loader,
-                                  "test": test_data_loader}, metrics
+                                  "test": test_data_loader}, metrics, frozen_models
 
     @staticmethod
     def data_provider(fold, flags, data_dict):
@@ -267,14 +241,14 @@ class SingleViewDTI(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, model, optimizer, data_loaders, metrics, transformers_dict, prot_desc_dict, tasks, view,
-              n_iters=5000, sim_data_node=None):
+    def train(eval_fn, model, optimizer, data_loaders, metrics, frozen_models, transformers_dict, prot_desc_dict, tasks,
+              view_lbl, n_iters=5000, sim_data_node=None):
         start = time.time()
         best_model_wts = model.state_dict()
         best_score = -10000
         best_epoch = -1
         n_epochs = n_iters // len(data_loaders["train"])
-        scheduler = sch.StepLR(optimizer, step_size=40, gamma=0.01)
+        scheduler = sch.StepLR(optimizer, step_size=400, gamma=0.01)
         criterion = torch.nn.MSELoss()
 
         # sub-nodes of sim data resource
@@ -292,6 +266,10 @@ class SingleViewDTI(Trainer):
         # Main training loop
         for epoch in range(n_epochs):
             for phase in ["train", "val"]:
+                # ensure these models are frozen at all times
+                for m in frozen_models:
+                    m.eval()
+
                 if phase == "train":
                     print("Training....")
                     # Training mode
@@ -308,15 +286,17 @@ class SingleViewDTI(Trainer):
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
-                    batch_size, data = batch_collator(batch, prot_desc_dict, spec=view)
+                    batch_size, data = batch_collator(batch, prot_desc_dict, spec=view_lbl,
+                                                      cuda_prot=False)
                     # Data
-                    if view == "gconv":
+                    protein_x = data[view_lbl][0][2]
+                    if view_lbl == "gconv":
                         # graph data structure is: [(compound data, batch_size), protein_data]
-                        X = ((data[view][0][0], batch_size), data[view][0][1])
+                        X = (protein_x, (data[view_lbl][0][0], batch_size))
                     else:
-                        X = data[view][0]
-                    y = data[view][1]
-                    w = data[view][2].reshape(-1, 1).astype(np.float)
+                        X = (protein_x, data[view_lbl][0])
+                    y = data[view_lbl][1]
+                    w = data[view_lbl][2].reshape(-1, 1).astype(np.float)
 
                     optimizer.zero_grad()
 
@@ -344,7 +324,7 @@ class SingleViewDTI(Trainer):
                     else:
                         if str(loss.item()) != "nan":  # useful in hyperparameter search
                             eval_dict = {}
-                            score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict[view])
+                            score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict[view_lbl])
                             # for epoch stats
                             epoch_scores.append(score)
 
@@ -459,14 +439,14 @@ class SingleViewDTI(Trainer):
 
 
 def main(flags):
-    if len(flags["views"]) > 0:
-        print("Single views for training:", flags["views"])
+    if len(flags.views) > 0:
+        print("Single views for training:", flags.views)
     else:
         print("No views selected for training")
 
-    for view in flags["views"]:
-        sim_label = "CUDA={}, view={}".format(cuda, view)
-        print(sim_label)
+    for view in flags.views:
+        sim_label = "cpi_prediction_baseline"
+        print("CUDA={}, view={}".format(cuda, view))
 
         # Simulation data resource tree
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
@@ -481,7 +461,17 @@ def main(flags):
         num_cuda_dvcs = torch.cuda.device_count()
         cuda_devices = None if num_cuda_dvcs == 1 else [i for i in range(1, num_cuda_dvcs)]
 
+        # Runtime Protein stuff
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
+        prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
+        pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
+        flags["prot_vocab_size"] = len(prot_vocab)
+        flags["protein_profile"] = prot_profile
+        flags["protein_embeddings"] = pretrained_embeddings
+        flags["embeddings_dim"] = 100
+
+        # For searching over multiple seeds
+        hparam_search = None
 
         for seed in seeds:
             # for data collection of this round of simulation.
@@ -503,7 +493,8 @@ def main(flags):
             data_key = {"ecfp4": "ECFP4",
                         "ecfp8": "ECFP8",
                         "weave": "Weave",
-                        "gconv": "GraphConv"}.get(view)
+                        "gconv": "GraphConv",
+                        "gnn": "GNN"}.get(view)
             data_dict[view] = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict[view] = data_dict[view][2]
 
@@ -530,33 +521,33 @@ def main(flags):
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
-                                    "n_iters": 10000,
-                                    "view": view}
+                                    "n_iters": 3000}
 
                 hparams_conf = get_hparam_config(flags, view)
+                if hparam_search is None:
+                    search_alg = {"random_search": RandomSearchCV,
+                                  "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
+                                                                            BayesianOptSearchCV)
+                    min_opt = "gp"
+                    hparam_search = search_alg(hparam_config=hparams_conf,
+                                               num_folds=k,
+                                               initializer=trainer.initialize,
+                                               data_provider=trainer.data_provider,
+                                               train_fn=trainer.train,
+                                               eval_fn=trainer.evaluate,
+                                               save_model_fn=io.save_model,
+                                               init_args=extra_init_args,
+                                               data_args=extra_data_args,
+                                               train_args=extra_train_args,
+                                               data_node=data_node,
+                                               split_label=split_label,
+                                               sim_label=sim_label,
+                                               minimizer=min_opt,
+                                               dataset_label=dataset_lbl,
+                                               results_file="{}_{}_dti_{}_{}.csv".format(
+                                                   flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                search_alg = {"random_search": RandomSearchCV,
-                              "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
-                                                                        BayesianOptSearchCV)
-
-                hparam_search = search_alg(hparam_config=hparams_conf,
-                                           num_folds=k,
-                                           initializer=trainer.initialize,
-                                           data_provider=trainer.data_provider,
-                                           train_fn=trainer.train,
-                                           eval_fn=trainer.evaluate,
-                                           save_model_fn=io.save_model,
-                                           init_args=extra_init_args,
-                                           data_args=extra_data_args,
-                                           train_args=extra_train_args,
-                                           data_node=data_node,
-                                           split_label=split_label,
-                                           sim_label=view,
-                                           dataset_label=dataset_lbl,
-                                           results_file="{}_{}_dti_{}.csv".format(flags["hparam_search_alg"], view,
-                                                                                  date_label))
-
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
@@ -586,19 +577,18 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
                transformers_dict, view, k=None):
     data = trainer.data_provider(k, flags, data_dict)
-    model, optimizer, data_loaders, metrics = trainer.initialize(hparams=hyper_params,
-                                                                 train_dataset=data["train"],
-                                                                 val_dataset=data["val"],
-                                                                 test_dataset=data["test"])
+    model, optimizer, data_loaders, metrics, frozen_models = trainer.initialize(hparams=hyper_params,
+                                                                                train_dataset=data["train"],
+                                                                                val_dataset=data["val"],
+                                                                                test_dataset=data["test"])
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
                                prot_desc_dict, tasks, view=view, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics,
-                                            transformers_dict,
-                                            prot_desc_dict, tasks, n_iters=10000, view_lbl=view,
+        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, frozen_models,
+                                            transformers_dict, prot_desc_dict, tasks, n_iters=10000, view_lbl=view,
                                             sim_data_node=sim_data_node)
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
@@ -643,11 +633,13 @@ def default_hparams_rand(flags, view):
 
 
 def default_hparams_bopt(flags, view):
+    prot_model = "p2v"
     return {
         "view": view,
         "prot_dim": 8421,
         "comp_dim": 1024,
         "hdims": [653, 3635],
+        "latent_dim": 100,
 
         # weight initialization
         "kaiming_constant": 5,
@@ -664,6 +656,31 @@ def default_hparams_bopt(flags, view):
         "optimizer__global__weight_decay": 0.004665,
         "optimizer__global__lr": 0.04158,
         "optimizer__adadelta__rho": 0.115873,
+
+        "prot": {
+            "model_type": prot_model,
+            "in_dim": 8421,
+            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
+            "vocab_size": flags["prot_vocab_size"],
+            "protein_profile": flags["protein_profile"],
+            "rnn_hidden_dim": 128,
+            "protein_embeddings": flags["protein_embeddings"]
+        },
+        "weave": {
+            "dim": 50,
+            "update_pairs": False,
+        },
+        "gconv": {
+            "dim": 512,
+        },
+        "ecfp8": {
+            "in_dim": 1024,
+            "ecfp_hdims": [653, 3635],
+        },
+        "cpi_baseline": {
+            "window": 11,
+            "num_layers": 3
+        }
     }
 
 
@@ -719,6 +736,15 @@ def get_hparam_config(flags, view):
         # "optimizer__rmsprop__centered": CategoricalParam(choices=[True, False])
 
     }
+
+
+class Flags(object):
+    # enables using either object referencing or dict indexing to retrieve user passed arguments of flag objects.
+    def __getitem__(self, item):
+        return self.__dict__[item]
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
 
 
 if __name__ == '__main__':
@@ -788,11 +814,19 @@ if __name__ == '__main__':
                         action='append',
                         help='A list containing paths to protein descriptors.'
                         )
-    # parser.add_argument('--seed',
-    #                     type=int,
-    #                     action="append",
-    #                     default=[123, 124, 125],
-    #                     help='Random seeds to be used.')
+    parser.add_argument('--prot_profile',
+                        type=str,
+                        help='A resource for retrieving embedding indexing profile of proteins.'
+                        )
+    parser.add_argument('--prot_vocab',
+                        type=str,
+                        help='A resource containing all N-gram segments/words constructed from the protein sequences.'
+                        )
+    parser.add_argument('--prot_embeddings',
+                        type=str,
+                        dest="protein_embeddings",
+                        help='Numpy array file containing the pretrained protein "words" embeddings'
+                        )
     parser.add_argument('--no_reload',
                         action="store_false",
                         dest='reload',
@@ -811,6 +845,7 @@ if __name__ == '__main__':
                         help="Hyperparameter search algorithm to use. One of [bayopt_search, random_search]")
     parser.add_argument("--view",
                         action="append",
+                        dest="views",
                         help="The view to be simulated. One of [ecfp4, ecfp8, weave, gconv]")
     parser.add_argument("--eval",
                         action="store_true",
@@ -821,29 +856,9 @@ if __name__ == '__main__':
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
 
     args = parser.parse_args()
-
-    FLAGS = dict()
-    FLAGS['dataset'] = args.dataset
-    FLAGS['fold_num'] = args.fold_num
-    FLAGS['cv'] = True if FLAGS['fold_num'] > 2 else False
-    FLAGS['test'] = args.test
-    FLAGS['splitting_alg'] = args.splitting_alg
-    FLAGS['filter_threshold'] = args.filter_threshold
-    FLAGS['cold_drug'] = args.cold_drug
-    FLAGS['cold_target'] = args.cold_target
-    FLAGS['cold_drug_cluster'] = args.cold_drug_cluster
-    FLAGS['predict_cold'] = args.predict_cold
-    FLAGS['model_dir'] = args.model_dir
-    FLAGS['model_name'] = args.model_name
-    FLAGS['prot_desc_path'] = args.prot_desc_path
-    # FLAGS['seeds'] = args.seed
-    FLAGS['reload'] = args.reload
-    FLAGS['data_dir'] = args.data_dir
-    FLAGS['split_warm'] = args.split_warm
-    FLAGS['hparam_search'] = args.hparam_search
-    FLAGS["hparam_search_alg"] = args.hparam_search_alg
-    FLAGS["views"] = args.view
-    FLAGS["eval"] = args.eval
-    FLAGS["eval_model_name"] = args.eval_model_name
-
-    main(flags=FLAGS)
+    flags = Flags()
+    args_dict = args.__dict__
+    for arg in args_dict:
+        setattr(flags, arg, args_dict[arg])
+    setattr(flags, "cv", True if flags.fold_num > 2 else False)
+    main(flags)

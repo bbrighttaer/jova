@@ -41,8 +41,8 @@ def split_sequence_overlapping(sequence, ngram=3):
     return words
 
 
-def create_protein_profile(vocab, words):
-    profile = [vocab[w] for w in words]
+def create_protein_profile(vocab, words, window):
+    profile = group_ngrams([vocab[w] for w in words], window, len(vocab))
     return np.array(profile)
 
 
@@ -54,6 +54,25 @@ def dump_binary(obj, filename, clazz):
 def load_binary(filename):
     with open(filename, 'rb') as f:
         return pickle.load(f)
+
+
+def group_ngrams(p_words, window, fill_value):
+    """
+
+    :param p_words:
+    :param window:
+    :param fill_value: Index for retrieving all zeros for padded regions. When loading the pre-trained
+    embedding matrix, this row is filled with zeros. This is set as an additional row (last row) of the matrix.
+    :return:
+    """
+    w = []
+    start = 0
+    for i in range(len(p_words) // window + 1):
+        grouped_words = p_words[start:start + window]
+        grouped_words = grouped_words + [fill_value] * (window - len(grouped_words))
+        w.append(grouped_words)
+        start += window
+    return w
 
 
 if __name__ == '__main__':
@@ -76,6 +95,14 @@ if __name__ == '__main__':
                         required=True,
                         help='The file containing protein words (keys) and their index (values) '
                              'in the ProtVec embeddings')
+    parser.add_argument('--window',
+                        type=int,
+                        required=True,
+                        help='The window for forming protein sub-sequences from the n-grams')
+    # parser.add_argument('--dim',
+    #                     type=int,
+    #                     required=True,
+    #                     help='The dimension of the embeddings for each n-gram/word in the protein')
     args = parser.parse_args()
 
     word_dict = load_binary(args.vocab)
@@ -90,7 +117,7 @@ if __name__ == '__main__':
             if args.verbose:
                 print("Label={}, Sequence={}".format(label, sequence))
             words = split_sequence_overlapping(sequence, args.ngram)
-            protein_profile = create_protein_profile(word_dict, words)
+            protein_profile = create_protein_profile(word_dict, words, args.window)
             proteins[label] = protein_profile
     print("Saving files...")
     dump_binary(proteins, '../../data/protein/proteins.profile', dict)

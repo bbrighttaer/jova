@@ -10,12 +10,14 @@ import padme
 import pandas as pd
 
 import ivpgan.splits as splits
+from feat.gnnfeat import GNNFeaturizer
 
 
 def load_davis(featurizer='Weave', cross_validation=False, test=False, split='random',
                reload=True, K=5, mode='regression', predict_cold=False, cold_drug=False,
                cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
-               prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True, seed=0):
+               prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True, seed=0,
+               gnn_radius=2):
     # The last parameter means only splitting into training and validation sets.
 
     if cross_validation:
@@ -70,6 +72,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
             return tasks, all_dataset, transformers
 
     dataset_file = os.path.join(data_dir, file_name)
+    is_gnn = False
     if featurizer == 'Weave':
         featurizer = padme.feat.WeaveFeaturizer()
     elif featurizer == 'ECFP4':
@@ -78,11 +81,18 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         featurizer = padme.feat.CircularFingerprint(size=1024, radius=4)
     elif featurizer == 'GraphConv':
         featurizer = padme.feat.ConvMolFeaturizer()
+    elif featurizer == 'GNN':
+        featurizer = GNNFeaturizer(radius=gnn_radius)
+        is_gnn = True
 
     loader = padme.data.CSVLoader(
         tasks=tasks, smiles_field="smiles", protein_field="proteinName",
         source_field='protein_dataset', featurizer=featurizer, prot_seq_dict=prot_seq_dict)
     dataset = loader.featurize(dataset_file, shard_size=8192)
+
+    # Save GNN info needed at runtime
+    if is_gnn:
+        GNNFeaturizer.save_featurization_info(data_dir)
 
     if mode == 'regression':
         transformers = [
