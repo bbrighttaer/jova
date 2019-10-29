@@ -20,21 +20,24 @@ import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from deepchem.trans import undo_transforms
+from soek import DictParam
+from soek.bopt import BayesianOptSearchCV
+from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, RealParam
+from soek.rand import RandomSearchCV
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import ivpgan.metrics as mt
 from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
-from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
-from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, ConcatLayer
-from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential, ProtCNN, ProtCnnForward
+from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather
+from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, ProtCNN, \
+    ProtCnnForward, GraphNeuralNet
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.io import load_model, save_model, load_pickle, load_numpy_array
+from ivpgan.utils.math import ExpAverage
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.train_helpers import count_parameters, create_torch_embeddings, FrozenModels
 
@@ -116,6 +119,14 @@ def create_gconv_net(hparams):
                          nn.BatchNorm1d(hparams["latent_dim"]), nn.ReLU())
 
 
+def create_gnn_net(hparams):
+    dim = hparams["gnn"]["dim"]
+    gnn_model = GraphNeuralNet(num_fingerprints=len(hparams["gnn"]["fingerprint"]), embedding_dim=dim,
+                               num_layers=hparams["gnn"]["num_layers"])
+    return nn.Sequential(gnn_model, nn.Linear(dim, hparams["prot"]["dim"]),
+                         nn.BatchNorm1d(hparams["prot"]["dim"]), nn.ReLU(), nn.Dropout(hparams["dprob"]))
+
+
 class SingleViewDTI(Trainer):
 
     @staticmethod
@@ -127,7 +138,8 @@ class SingleViewDTI(Trainer):
         create_comp_model = {"ecfp4": create_ecfp_net,
                              "ecfp8": create_ecfp_net,
                              "weave": create_weave_net,
-                             "gconv": create_gconv_net}.get(view_lbl)
+                             "gconv": create_gconv_net,
+                             "gnn": create_gnn_net}.get(view_lbl)
         comp_model = create_comp_model(hparams)
         pt_embeddings = create_torch_embeddings(frozen_models_hook=frozen_models,
                                                 np_embeddings=hparams["prot"]["protein_embeddings"])
@@ -137,7 +149,7 @@ class SingleViewDTI(Trainer):
                              num_layers=hparams["cpi_baseline"]["num_layers"])
         comp_net_pcnn = ProtCnnForward(prot_cnn_model=prot_model, comp_model=comp_model)
 
-        p = 2 * hparams["latent_dim"]
+        p = 2 * hparams["prot"]["dim"]
         layers = [comp_net_pcnn]
         for dim in hparams["hdims"]:
             layers.append(nn.Linear(p, dim))
@@ -242,11 +254,13 @@ class SingleViewDTI(Trainer):
 
     @staticmethod
     def train(eval_fn, model, optimizer, data_loaders, metrics, frozen_models, transformers_dict, prot_desc_dict, tasks,
-              view_lbl, n_iters=5000, sim_data_node=None):
+              view_lbl, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None):
         start = time.time()
         best_model_wts = model.state_dict()
         best_score = -10000
         best_epoch = -1
+        terminate_training = False
+        e_avg = ExpAverage(.01)
         n_epochs = n_iters // len(data_loaders["train"])
         scheduler = sch.StepLR(optimizer, step_size=400, gamma=0.01)
         criterion = torch.nn.MSELoss()
@@ -262,100 +276,112 @@ class SingleViewDTI(Trainer):
         # add sim data nodes to parent node
         if sim_data_node:
             sim_data_node.data = [train_loss_node, metrics_node, scores_node]
-
-        # Main training loop
-        for epoch in range(n_epochs):
-            for phase in ["train", "val"]:
-                # ensure these models are frozen at all times
-                for m in frozen_models:
-                    m.eval()
-
-                if phase == "train":
-                    print("Training....")
-                    # Training mode
-                    model.train()
-                else:
-                    print("Validation...")
-                    # Evaluation mode
-                    model.eval()
-
-                data_size = 0.
-                epoch_losses = []
-                epoch_scores = []
-
-                # Iterate through mini-batches
-                i = 0
-                for batch in tqdm(data_loaders[phase]):
-                    batch_size, data = batch_collator(batch, prot_desc_dict, spec=view_lbl,
-                                                      cuda_prot=False)
-                    # Data
-                    protein_x = data[view_lbl][0][2]
-                    if view_lbl == "gconv":
-                        # graph data structure is: [(compound data, batch_size), protein_data]
-                        X = (protein_x, (data[view_lbl][0][0], batch_size))
-                    else:
-                        X = (protein_x, data[view_lbl][0])
-                    y = data[view_lbl][1]
-                    w = data[view_lbl][2].reshape(-1, 1).astype(np.float)
-
-                    optimizer.zero_grad()
-
-                    # forward propagation
-                    # track history if only in train
-                    with torch.set_grad_enabled(phase == "train"):
-                        outputs = model(X)
-                        target = torch.from_numpy(y.astype(np.float)).view(-1, 1).float()
-                        if cuda:
-                            target = target.cuda()
-                        loss = criterion(outputs, target)
+        try:
+            # Main training loop
+            for epoch in range(n_epochs):
+                if terminate_training:
+                    print("Terminating training...")
+                    break
+                for phase in ["train", "val"]:
+                    # ensure these models are frozen at all times
+                    for m in frozen_models:
+                        m.eval()
 
                     if phase == "train":
-                        print("\tEpoch={}/{}, batch={}/{}, loss={:.4f}".format(epoch + 1, n_epochs, i + 1,
-                                                                               len(data_loaders[phase]), loss.item()))
-                        # for epoch stats
-                        epoch_losses.append(loss.item())
-
-                        # for sim data resource
-                        loss_lst.append(loss.item())
-
-                        # optimization ops
-                        loss.backward()
-                        optimizer.step()
+                        print("Training....")
+                        # Training mode
+                        model.train()
                     else:
-                        if str(loss.item()) != "nan":  # useful in hyperparameter search
-                            eval_dict = {}
-                            score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict[view_lbl])
+                        print("Validation...")
+                        # Evaluation mode
+                        model.eval()
+
+                    data_size = 0.
+                    epoch_losses = []
+                    epoch_scores = []
+
+                    # Iterate through mini-batches
+                    i = 0
+                    for batch in tqdm(data_loaders[phase]):
+                        batch_size, data = batch_collator(batch, prot_desc_dict, spec=view_lbl,
+                                                          cuda_prot=False)
+                        # Data
+                        protein_x = data[view_lbl][0][2]
+                        if view_lbl == "gconv":
+                            # graph data structure is: [(compound data, batch_size), protein_data]
+                            X = (protein_x, (data[view_lbl][0][0], batch_size))
+                        else:
+                            X = (protein_x, data[view_lbl][0][0])
+                        y = data[view_lbl][1]
+                        w = data[view_lbl][2].reshape(-1, 1).astype(np.float)
+
+                        optimizer.zero_grad()
+
+                        # forward propagation
+                        # track history if only in train
+                        with torch.set_grad_enabled(phase == "train"):
+                            outputs = model(X)
+                            target = torch.from_numpy(y.astype(np.float)).view(-1, 1).float()
+                            if cuda:
+                                target = target.cuda()
+                            loss = criterion(outputs, target)
+
+                        if phase == "train":
+                            print("\tEpoch={}/{}, batch={}/{}, loss={:.4f}".format(epoch + 1, n_epochs, i + 1,
+                                                                                   len(data_loaders[phase]),
+                                                                                   loss.item()))
                             # for epoch stats
-                            epoch_scores.append(score)
+                            epoch_losses.append(loss.item())
 
                             # for sim data resource
-                            scores_lst.append(score)
-                            for m in eval_dict:
-                                if m in metrics_dict:
-                                    metrics_dict[m].append(eval_dict[m])
-                                else:
-                                    metrics_dict[m] = [eval_dict[m]]
+                            loss_lst.append(loss.item())
 
-                            print("\nEpoch={}/{}, batch={}/{}, "
-                                  "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
-                                                                            len(data_loaders[phase]),
-                                                                            eval_dict, score))
+                            # optimization ops
+                            loss.backward()
+                            optimizer.step()
+                        else:
+                            if str(loss.item()) != "nan":  # useful in hyperparameter search
+                                eval_dict = {}
+                                score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict[view_lbl])
+                                # for epoch stats
+                                epoch_scores.append(score)
 
-                    i += 1
-                    data_size += batch_size
-                # End of mini=batch iterations.
+                                # for sim data resource
+                                scores_lst.append(score)
+                                for m in eval_dict:
+                                    if m in metrics_dict:
+                                        metrics_dict[m].append(eval_dict[m])
+                                    else:
+                                        metrics_dict[m] = [eval_dict[m]]
 
-                if phase == "train":
-                    # Adjust the learning rate.
-                    scheduler.step()
-                    print("\nPhase: {}, avg task loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
-                else:
-                    mean_score = np.mean(epoch_scores)
-                    if best_score < mean_score:
-                        best_score = mean_score
-                        best_model_wts = copy.deepcopy(model.state_dict())
-                        best_epoch = epoch
+                                print("\nEpoch={}/{}, batch={}/{}, "
+                                      "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
+                                                                                len(data_loaders[phase]),
+                                                                                eval_dict, score))
+                            else:
+                                terminate_training = True
 
+                        i += 1
+                        data_size += batch_size
+                    # End of mini=batch iterations.
+
+                    if phase == "train":
+                        ep_loss = np.nanmean(epoch_losses)
+                        e_avg.update(ep_loss)
+                        if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
+                            if e_avg.value > epoch_ckpt[1]:
+                                terminate_training = True
+                        # Adjust the learning rate.
+                        scheduler.step()
+                        print("\nPhase: {}, avg task loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
+                    else:
+                        mean_score = np.mean(epoch_scores)
+                        if best_score < mean_score:
+                            best_score = mean_score
+                            best_model_wts = copy.deepcopy(model.state_dict())
+                            best_epoch = epoch
+        except RuntimeError as e:
+            print(str(e))
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
         model.load_state_dict(best_model_wts)
@@ -498,6 +524,10 @@ def main(flags):
             data_dict[view] = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict[view] = data_dict[view][2]
 
+            # Fingerprint dict for GNN if available
+            if flags.fingerprint is not None:
+                flags["gnn_fingerprint"] = load_pickle(file_name=flags.fingerprint)
+
             tasks = data_dict[view][0]
 
             trainer = SingleViewDTI()
@@ -521,7 +551,8 @@ def main(flags):
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
-                                    "n_iters": 3000}
+                                    "n_iters": 3000,
+                                    "view_lbl": view}
 
                 hparams_conf = get_hparam_config(flags, view)
                 if hparam_search is None:
@@ -547,14 +578,15 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30,
+                                          seed=seed, verbose=False)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
 
         # save simulation data resource tree to file.
-        sim_data.to_json(path="./analysis/")
+        # sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view):
@@ -636,10 +668,7 @@ def default_hparams_bopt(flags, view):
     prot_model = "p2v"
     return {
         "view": view,
-        "prot_dim": 8421,
-        "comp_dim": 1024,
         "hdims": [653, 3635],
-        "latent_dim": 100,
 
         # weight initialization
         "kaiming_constant": 5,
@@ -680,24 +709,28 @@ def default_hparams_bopt(flags, view):
         "cpi_baseline": {
             "window": 11,
             "num_layers": 3
+        },
+        "gnn": {
+            "fingerprint": flags["gnn_fingerprint"],
+            "num_layers": 3,
+            "dim": 100,
         }
     }
 
 
 def get_hparam_config(flags, view):
+    prot_model = "p2v"
     return {
         "view": ConstantParam(view),
-        "prot_dim": ConstantParam(8421),
-        "comp_dim": ConstantParam(1024),
         "hdims": DiscreteParam(min=256, max=5000, size=DiscreteParam(min=1, max=4)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),  # DiscreteParam(min=2, max=9),
 
         # dropout regs
-        "dprob": LogRealParam(min=-2),
+        "dprob": RealParam(min=0.1),
 
-        "tr_batch_size": CategoricalParam(choices=[32, 64, 128, 256, 512]),
+        "tr_batch_size": ConstantParam(256),
         "val_batch_size": ConstantParam(512),
         "test_batch_size": ConstantParam(512),
 
@@ -706,35 +739,35 @@ def get_hparam_config(flags, view):
         "optimizer__global__weight_decay": LogRealParam(),
         "optimizer__global__lr": LogRealParam(),
 
-        # SGD
-        "optimizer__sgd__nesterov": CategoricalParam(choices=[True, False]),
-        "optimizer__sgd__momentum": LogRealParam(),
-        # "optimizer__sgd__lr": LogRealParam(),
-
-        # ADAM
-        # "optimizer__adam__lr": LogRealParam(),
-        "optimizer__adam__amsgrad": CategoricalParam(choices=[True, False]),
-
-        # Adadelta
-        # "optimizer__adadelta__lr": LogRealParam(),
-        # "optimizer__adadelta__weight_decay": LogRealParam(),
-        "optimizer__adadelta__rho": LogRealParam(),
-
-        # Adagrad
-        # "optimizer__adagrad__lr": LogRealParam(),
-        "optimizer__adagrad__lr_decay": LogRealParam(),
-        # "optimizer__adagrad__weight_decay": LogRealParam(),
-
-        # Adamax
-        # "optimizer__adamax__lr": LogRealParam(),
-        # "optimizer__adamax__weight_decay": LogRealParam(),
-
-        # RMSprop
-        # "optimizer__rmsprop__lr": LogRealParam(),
-        # "optimizer__rmsprop__weight_decay": LogRealParam(),
-        "optimizer__rmsprop__momentum": LogRealParam(),
-        # "optimizer__rmsprop__centered": CategoricalParam(choices=[True, False])
-
+        "prot": ConstantParam({
+            "model_type": prot_model,
+            "in_dim": 8421,
+            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
+            "vocab_size": flags["prot_vocab_size"],
+            "protein_profile": flags["protein_profile"],
+            "rnn_hidden_dim": 128,
+            "protein_embeddings": flags["protein_embeddings"]
+        }),
+        "weave": ConstantParam({
+            "dim": 50,
+            "update_pairs": False,
+        }),
+        "gconv": ConstantParam({
+            "dim": 512,
+        }),
+        "ecfp8": ConstantParam({
+            "in_dim": 1024,
+            "ecfp_hdims": [653, 3635],
+        }),
+        "cpi_baseline": DictParam({
+            "window": ConstantParam(11),
+            "num_layers": DiscreteParam(min=1, max=4)
+        }),
+        "gnn": DictParam({
+            "fingerprint": ConstantParam(flags["gnn_fingerprint"]),
+            "num_layers": DiscreteParam(1, 4),
+            "dim": DiscreteParam(min=64, max=512),
+        })
     }
 
 
@@ -854,6 +887,11 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument("--fingerprint",
+                        default=None,
+                        type=str,
+                        help="The pickled python dictionary containing the fingerprint profiles of atoms and their"
+                             "neighbors")
 
     args = parser.parse_args()
     flags = Flags()

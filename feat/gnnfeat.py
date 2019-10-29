@@ -19,36 +19,36 @@ from collections import defaultdict
 from rdkit import Chem
 
 
-def create_atoms(mol):
+def create_atoms(feat, mol):
     """Create a list of atom (e.g., hydrogen and oxygen) IDs
     considering the aromaticity."""
     atoms = [a.GetSymbol() for a in mol.GetAtoms()]
     for a in mol.GetAromaticAtoms():
         i = a.GetIdx()
         atoms[i] = (atoms[i], 'aromatic')
-    atoms = [GNNFeaturizer.atom_dict[a] for a in atoms]
+    atoms = [feat.atom_dict[a] for a in atoms]
     return np.array(atoms)
 
 
-def create_ijbonddict(mol):
+def create_ijbonddict(feat, mol):
     """Create a dictionary, which each key is a node ID
     and each value is the tuples of its neighboring node
     and bond (e.g., single and double) IDs."""
     i_jbond_dict = defaultdict(lambda: [])
     for b in mol.GetBonds():
         i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-        bond = GNNFeaturizer.bond_dict[str(b.GetBondType())]
+        bond = feat.bond_dict[str(b.GetBondType())]
         i_jbond_dict[i].append((j, bond))
         i_jbond_dict[j].append((i, bond))
     return i_jbond_dict
 
 
-def extract_fingerprints(atoms, i_jbond_dict, radius):
+def extract_fingerprints(feat, atoms, i_jbond_dict, radius):
     """Extract the r-radius subgraphs (i.e., fingerprints)
     from a molecular graph using Weisfeiler-Lehman algorithm."""
 
     if (len(atoms) == 1) or (radius == 0):
-        fingerprints = [GNNFeaturizer.fingerprint_dict[a] for a in atoms]
+        fingerprints = [feat.fingerprint_dict[a] for a in atoms]
 
     else:
         nodes = atoms
@@ -62,7 +62,7 @@ def extract_fingerprints(atoms, i_jbond_dict, radius):
             for i, j_edge in i_jedge_dict.items():
                 neighbors = [(nodes[j], edge) for j, edge in j_edge]
                 fingerprint = (nodes[i], tuple(sorted(neighbors)))
-                fingerprints.append(GNNFeaturizer.fingerprint_dict[fingerprint])
+                fingerprints.append(feat.fingerprint_dict[fingerprint])
             nodes = fingerprints
 
             """Also update each edge ID considering two nodes
@@ -71,7 +71,7 @@ def extract_fingerprints(atoms, i_jbond_dict, radius):
             for i, j_edge in i_jedge_dict.items():
                 for j, edge in j_edge:
                     both_side = tuple(sorted((nodes[i], nodes[j])))
-                    edge = GNNFeaturizer.edge_dict[(both_side, edge)]
+                    edge = feat.edge_dict[(both_side, edge)]
                     _i_jedge_dict[i].append((j, edge))
             i_jedge_dict = _i_jedge_dict
 
@@ -107,18 +107,18 @@ class GNNFeaturizer(Featurizer):
     Graph Neural Net.
 
     Compound featurizer described in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
-    This is basically a featurization wrapper of the initial code accompanying the work above.
+    This is basically a featurization wrapper of the initial GNN code accompanying the work cited above.
     """
 
     name = ["gnn_mol"]
-    atom_dict = defaultdict(lambda: len(GNNFeaturizer.atom_dict))
-    bond_dict = defaultdict(lambda: len(GNNFeaturizer.bond_dict))
-    fingerprint_dict = defaultdict(lambda: len(GNNFeaturizer.fingerprint_dict))
-    edge_dict = defaultdict(lambda: len(GNNFeaturizer.edge_dict))
 
     def __init__(self, radius=2):
         super(GNNFeaturizer, self).__init__()
         self.radius = radius
+        self.atom_dict = defaultdict(lambda: len(self.atom_dict))
+        self.bond_dict = defaultdict(lambda: len(self.bond_dict))
+        self.fingerprint_dict = defaultdict(lambda: len(self.fingerprint_dict))
+        self.edge_dict = defaultdict(lambda: len(self.edge_dict))
 
     def _featurize(self, mol, smiles):
         """
@@ -128,14 +128,13 @@ class GNNFeaturizer(Featurizer):
         :return:
         """
         mol = Chem.AddHs(mol)  # Consider hydrogens.
-        atoms = create_atoms(mol)
-        i_jbond_dict = create_ijbonddict(mol)
-        fingerprints = extract_fingerprints(atoms, i_jbond_dict, self.radius)
+        atoms = create_atoms(self, mol)
+        i_jbond_dict = create_ijbonddict(self, mol)
+        fingerprints = extract_fingerprints(self, atoms, i_jbond_dict, self.radius)
         adjacency = create_adjacency(mol)
         return GnnMol(mol, fingerprints, adjacency, smiles)
 
-    @classmethod
-    def save_featurization_info(cls, save_dir):
+    def save_featurization_info(self, save_dir):
         """
         Persists GNN featurization data needed at runtime.
 
@@ -144,4 +143,4 @@ class GNNFeaturizer(Featurizer):
         """
         os.makedirs(save_dir, exist_ok=True)
         with open(os.path.join(save_dir, 'fingerprint_dict.pickle'), 'wb') as f:
-            pickle.dump(cls.fingerprint_dict, f)
+            pickle.dump(dict(self.fingerprint_dict), f)

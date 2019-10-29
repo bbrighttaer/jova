@@ -903,4 +903,60 @@ class GraphNeuralNet(nn.Module):
     """
     Wrapper for the GNN work in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
     """
-    pass
+
+    def __init__(self, num_fingerprints, embedding_dim, num_layers=3, update='mean', activation='relu'):
+        super(GraphNeuralNet, self).__init__()
+        self.output = update
+        self.activation = get_activation_func(activation)
+        self.embed_fingerprint = nn.Embedding(num_fingerprints, embedding_dim)
+        self.W_gnn = nn.ModuleList([nn.Linear(embedding_dim, embedding_dim) for _ in range(num_layers)])
+
+    def update_fingerprints(self, xs, A, M, i):
+        """Update the node vectors in a graph
+        considering their neighboring node vectors (i.e., sum or mean),
+        which are non-linear transformed by neural network."""
+        hs = self.activation(self.W_gnn[i](xs))
+        if self.output == 'sum':
+            return xs + torch.matmul(A, hs)
+        else:
+            return xs + torch.matmul(A, hs) / (M - 1)
+
+    def forward(self, inputs):
+        fingerprints, adjacency_matrices, M, axis = inputs
+
+        fingerprints = self.embed_fingerprint(fingerprints)
+
+        for i in range(len(self.W_gnn)):
+            fingerprints = self.update_fingerprints(fingerprints, adjacency_matrices, M, i)
+
+        if self.output == 'sum':
+            molecular_vectors = self.sum_axis(fingerprints, axis)
+        else:
+            molecular_vectors = self.mean_axis(fingerprints, axis)
+
+        return molecular_vectors
+
+    def sum_axis(self, xs, axis):
+        y = [torch.sum(x, 0) for x in torch.split(xs, axis)]
+        return torch.stack(y)
+
+    def mean_axis(self, xs, axis):
+        y = [torch.mean(x, 0) for x in torch.split(xs, axis)]
+        return torch.stack(y)
+
+
+class GraphNeuralNet2D(GraphNeuralNet):
+
+    def forward(self, inputs):
+        fingerprints, adjacency_matrices, M, axis = inputs
+
+        fingerprints = self.embed_fingerprint(fingerprints)
+
+        for i in range(len(self.W_gnn)):
+            fingerprints = self.update_fingerprints(fingerprints, adjacency_matrices, M, i)
+
+        mols = torch.split(fingerprints, axis)
+        max_seg = max([len(m) for m in mols])
+        mols = [F.pad(mol, (0, 0, 0, max_seg - len(mol))) for mol in mols]
+        mols = torch.stack(mols, 1)
+        return mols

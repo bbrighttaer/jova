@@ -72,7 +72,6 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
             return tasks, all_dataset, transformers
 
     dataset_file = os.path.join(data_dir, file_name)
-    is_gnn = False
     if featurizer == 'Weave':
         featurizer = padme.feat.WeaveFeaturizer()
     elif featurizer == 'ECFP4':
@@ -83,7 +82,6 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         featurizer = padme.feat.ConvMolFeaturizer()
     elif featurizer == 'GNN':
         featurizer = GNNFeaturizer(radius=gnn_radius)
-        is_gnn = True
 
     loader = padme.data.CSVLoader(
         tasks=tasks, smiles_field="smiles", protein_field="proteinName",
@@ -91,8 +89,8 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
     dataset = loader.featurize(dataset_file, shard_size=8192)
 
     # Save GNN info needed at runtime
-    if is_gnn:
-        GNNFeaturizer.save_featurization_info(data_dir)
+    if isinstance(featurizer, GNNFeaturizer):
+        featurizer.save_featurization_info(data_dir)
 
     if mode == 'regression':
         transformers = [

@@ -168,7 +168,8 @@ def batch_collator(batch, prot_desc_dict, spec, cuda_prot=True):
         "ecfp4": process_ecfp_view_data,
         "ecfp8": process_ecfp_view_data,
         "weave": process_weave_view_data,
-        "gconv": process_gconv_view_data
+        "gconv": process_gconv_view_data,
+        "gnn": process_gnn_view_data
     }
     active_views = []
     if isinstance(spec, dict):
@@ -297,8 +298,49 @@ def process_gconv_view_data(X, prot_desc_dict, idx, cuda_prot):
     prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
     prots_tensor = cuda(torch.from_numpy(prot_desc)) if cuda_prot else torch.from_numpy(prot_desc)
 
-    batch_size = len(x_data)
     return mol_data, prots_tensor.float(), prot_names
+
+
+def process_gnn_view_data(X, prot_desc_dict, idx, cuda_prot):
+    prot_names = []
+    x_data = X[:, 0, idx]
+    adjacency_matrices = []
+    fp_profiles = []
+    prot_desc = []
+
+    for pair in x_data:
+        mol, prot = pair
+        adjacency_matrices.append(mol.adjacency)
+        fp_profiles.append(cuda(torch.tensor(mol.fingerprints, dtype=torch.long)))
+        prot_names.append(prot.get_name())
+        prot_desc.append(prot_desc_dict[prot.get_name()])
+
+    # compound
+    adjacency_matrices = pad(adjacency_matrices)
+    axis = [len(f) for f in fp_profiles]
+    M = np.concatenate([np.repeat(len(f), len(f)) for f in fp_profiles])
+    M = torch.unsqueeze(torch.FloatTensor(M), 1)
+    fingerprints = torch.cat(fp_profiles)
+    mol_data = (fingerprints, adjacency_matrices, cuda(M), axis)
+
+    # protein - PSC
+    prot_desc = np.array(prot_desc)
+    prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
+    prots_tensor = cuda(torch.from_numpy(prot_desc)) if cuda_prot else torch.from_numpy(prot_desc)
+    return mol_data, prots_tensor.float(), prot_names
+
+
+def pad(matrices, pad_value=0):
+    """Pad adjacency matrices for batch processing."""
+    sizes = [m.shape[0] for m in matrices]
+    M = sum(sizes)
+    pad_matrices = pad_value + np.zeros((M, M))
+    i = 0
+    for j, m in enumerate(matrices):
+        j = sizes[j]
+        pad_matrices[i:i + j, i:i + j] = m
+        i += j
+    return cuda(torch.FloatTensor(pad_matrices))
 
 
 def cuda(tensor):

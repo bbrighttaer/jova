@@ -34,7 +34,8 @@ from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
-from ivpgan.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN
+from ivpgan.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN, \
+    GraphNeuralNet2D
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.math import ExpAverage, Count
@@ -56,6 +57,7 @@ use_ecfp8 = True
 use_weave = False
 use_gconv = True
 use_prot = True
+use_gnn = True
 
 
 def create_ecfp_net(hparams):
@@ -136,6 +138,13 @@ def create_gconv_net(hparams):
     return model
 
 
+def create_gnn_net(hparams):
+    dim = hparams["gnn"]["dim"]
+    gnn_model = GraphNeuralNet2D(num_fingerprints=len(hparams["gnn"]["fingerprint"]), embedding_dim=dim,
+                                 num_layers=hparams["gnn"]["num_layers"])
+    return nn.Sequential(gnn_model, nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(hparams["dprob"]))
+
+
 def create_integrated_net(hparams):
     # Convenient way of keeping track of models to be frozen during (or at the initial stages) training.
     frozen_models = FrozenModels()
@@ -149,6 +158,8 @@ def create_integrated_net(hparams):
         views["weave"] = create_weave_net(hparams)
     if use_gconv:
         views["gconv"] = create_gconv_net(hparams)
+    if use_gnn:
+        views["gnn"] = create_gnn_net(hparams)
     if use_prot:
         views["prot"] = create_prot_net(hparams, frozen_models)
 
@@ -338,7 +349,8 @@ class IntegratedViewDTI(Trainer):
                             for batch in tqdm(data_loaders[phase]):
                                 batch_size, data = batch_collator(batch, prot_desc_dict, spec={"ecfp8": use_ecfp8,
                                                                                                "weave": use_weave,
-                                                                                               "gconv": use_gconv},
+                                                                                               "gconv": use_gconv,
+                                                                                               "gnn": use_gnn},
                                                                   cuda_prot=prot_model_type == "psc")
                                 # organize the data for each view.
                                 Xs = {}
@@ -617,6 +629,9 @@ def main(flags):
         if use_gconv:
             data_dict["gconv"] = get_data("GraphConv", flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict["gconv"] = data_dict["gconv"][2]
+        if use_gnn:
+            data_dict["gnn"] = get_data("GNN", flags, prot_sequences=prot_seq_dict, seed=seed)
+            transformers_dict["gnn"] = data_dict["gnn"][2]
 
         tasks = data_dict[list(data_dict.keys())[0]][0]
 
