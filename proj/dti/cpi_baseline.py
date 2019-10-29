@@ -121,7 +121,7 @@ def create_gconv_net(hparams):
 
 def create_gnn_net(hparams):
     dim = hparams["gnn"]["dim"]
-    gnn_model = GraphNeuralNet(num_fingerprints=len(hparams["gnn"]["fingerprint"]), embedding_dim=dim,
+    gnn_model = GraphNeuralNet(num_fingerprints=hparams["gnn"]["fingerprint_size"], embedding_dim=dim,
                                num_layers=hparams["gnn"]["num_layers"])
     return nn.Sequential(gnn_model, nn.Linear(dim, hparams["prot"]["dim"]),
                          nn.BatchNorm1d(hparams["prot"]["dim"]), nn.ReLU(), nn.Dropout(hparams["dprob"]))
@@ -130,7 +130,8 @@ def create_gnn_net(hparams):
 class SingleViewDTI(Trainer):
 
     @staticmethod
-    def initialize(hparams, train_dataset, val_dataset, test_dataset, cuda_devices=None, mode="regression"):
+    def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, protein_embeddings,
+                   cuda_devices=None, mode="regression"):
         frozen_models = FrozenModels()
 
         # create network
@@ -142,8 +143,8 @@ class SingleViewDTI(Trainer):
                              "gnn": create_gnn_net}.get(view_lbl)
         comp_model = create_comp_model(hparams)
         pt_embeddings = create_torch_embeddings(frozen_models_hook=frozen_models,
-                                                np_embeddings=hparams["prot"]["protein_embeddings"])
-        prot_model = ProtCNN(protein_profile=hparams["prot"]["protein_profile"],
+                                                np_embeddings=protein_embeddings)
+        prot_model = ProtCNN(protein_profile=protein_profile,
                              embeddings=pt_embeddings,
                              window=hparams["cpi_baseline"]["window"],
                              num_layers=hparams["cpi_baseline"]["num_layers"])
@@ -492,9 +493,7 @@ def main(flags):
         prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
         pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
         flags["prot_vocab_size"] = len(prot_vocab)
-        flags["protein_profile"] = prot_profile
-        flags["protein_embeddings"] = pretrained_embeddings
-        flags["embeddings_dim"] = 100
+        flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
 
         # For searching over multiple seeds
         hparam_search = None
@@ -545,7 +544,9 @@ def main(flags):
 
                 # arguments to callables
                 extra_init_args = {"mode": "regression",
-                                   "cuda_devices": cuda_devices}
+                                   "cuda_devices": cuda_devices,
+                                   "protein_profile": prot_profile,
+                                   "protein_embeddings": pretrained_embeddings}
                 extra_data_args = {"flags": flags,
                                    "data_dict": data_dict}
                 extra_train_args = {"transformers_dict": transformers_dict,
@@ -579,17 +580,19 @@ def main(flags):
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
                 stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30,
-                                          seed=seed, verbose=False)
+                                          seed=seed, verbose=True)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
+                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node,
+                             view, prot_profile, pretrained_embeddings)
 
         # save simulation data resource tree to file.
         # sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view):
+def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
+                 prot_profile, pretrained_embeddings):
     hyper_params = default_hparams_bopt(flags, view)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
@@ -600,19 +603,21 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
             start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                       transformers_dict, view, k)
+                       transformers_dict, view, prot_profile, pretrained_embeddings, k)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                   transformers_dict, view)
+                   transformers_dict, view, prot_profile, pretrained_embeddings)
 
 
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-               transformers_dict, view, k=None):
+               transformers_dict, view, prot_profile, embeddings, k=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics, frozen_models = trainer.initialize(hparams=hyper_params,
                                                                                 train_dataset=data["train"],
                                                                                 val_dataset=data["val"],
-                                                                                test_dataset=data["test"])
+                                                                                test_dataset=data["test"],
+                                                                                protein_profile=prot_profile,
+                                                                                protein_embeddings=embeddings)
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
@@ -691,9 +696,7 @@ def default_hparams_bopt(flags, view):
             "in_dim": 8421,
             "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
             "vocab_size": flags["prot_vocab_size"],
-            "protein_profile": flags["protein_profile"],
-            "rnn_hidden_dim": 128,
-            "protein_embeddings": flags["protein_embeddings"]
+            "rnn_hidden_dim": 128
         },
         "weave": {
             "dim": 50,
@@ -711,7 +714,7 @@ def default_hparams_bopt(flags, view):
             "num_layers": 3
         },
         "gnn": {
-            "fingerprint": flags["gnn_fingerprint"],
+            "fingerprint_size": len(flags["gnn_fingerprint"]),
             "num_layers": 3,
             "dim": 100,
         }
@@ -744,9 +747,7 @@ def get_hparam_config(flags, view):
             "in_dim": 8421,
             "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
             "vocab_size": flags["prot_vocab_size"],
-            "protein_profile": flags["protein_profile"],
             "rnn_hidden_dim": 128,
-            "protein_embeddings": flags["protein_embeddings"]
         }),
         "weave": ConstantParam({
             "dim": 50,
@@ -764,7 +765,7 @@ def get_hparam_config(flags, view):
             "num_layers": DiscreteParam(min=1, max=4)
         }),
         "gnn": DictParam({
-            "fingerprint": ConstantParam(flags["gnn_fingerprint"]),
+            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"])),
             "num_layers": DiscreteParam(1, 4),
             "dim": DiscreteParam(min=64, max=512),
         })

@@ -244,7 +244,7 @@ def _construct_embedding_indices(prot_x, protein_profile, device, fill_val):
 
 class WeaveModel(nn.Module):
 
-    def __init__(self, weave_args, weave_gath_arg, update_pair=False, weave_type='1D'):
+    def __init__(self, weave_args, weave_gath_arg, update_pair=False, weave_type='1D', batch_first=False):
         """
         Creates a weave model
 
@@ -259,7 +259,7 @@ class WeaveModel(nn.Module):
             if weave_type.lower() == '1d':
                 weave_gath = WeaveGather(*weave_gath_arg.args)
             else:
-                weave_gath = WeaveGather2D(*weave_gath_arg)
+                weave_gath = WeaveGather2D(*weave_gath_arg, batch_first=batch_first)
             layers.append(weave_gath)
         self.weave_seq = WeaveSequential(*layers)
         # in_dim = weave_args[-1][2]
@@ -587,65 +587,49 @@ class Projector(nn.Module):
 
 class ProteinRNN(nn.Module):
 
-    def __init__(self, protein_profile, embeddings, hidden_dim, dropout, num_layers=1,
-                 bidrectional=False, activation='nonsat', batch_first=False):
+    def __init__(self, in_dim, hidden_dim, dropout, num_layers=1, bidrectional=False, activation='relu',
+                 batch_first=False):
         super(ProteinRNN, self).__init__()
-        self.protein_profile = protein_profile
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
+        self.hidden_dim = int(hidden_dim)
+        self.num_layers = int(num_layers)
         self.directions = max(1, int(bidrectional) + 1)
         self.activation = get_activation_func(activation)
-        self.embeddings = embeddings
-        self.embedding_dim = embeddings.weight.shape[0]
         if num_layers == 1:
             dropout = 0
-        self.model = nn.LSTM(input_size=self.embedding_dim, hidden_size=hidden_dim, num_layers=num_layers,
+        self.model = nn.LSTM(input_size=in_dim, hidden_size=self.hidden_dim, num_layers=self.num_layers,
                              batch_first=batch_first, dropout=dropout, bidirectional=bidrectional)
 
-    def forward(self, input):
-        # retrieve protein embedding profiles
-        x = [self.protein_profile[prot[1]].tolist() for prot in input]
-
-        # pad sequences
-        max_seq = max([len(p) for p in x])
-        x = [vec + [0] * (max_seq - len(vec)) for vec in x]
-        x = torch.tensor(x, dtype=torch.long).to(self.embeddings.weight.device)
-
-        # get protein embeddings
-        embeds = self.embeddings(x)
-
+    def forward(self, x):
         # RNN initial states
         # (layer_dim * num_directions, batch_size, hidden_dim)
-        h0 = torch.zeros(self.num_layers * self.directions, x.size(0), self.hidden_dim).to(embeds.device)
-        c0 = torch.zeros(self.num_layers * self.directions, x.size(0), self.hidden_dim).to(embeds.device)
+        h0 = torch.zeros(self.num_layers * self.directions, x.shape[0], self.hidden_dim).to(x.device)
+        c0 = torch.zeros(self.num_layers * self.directions, x.shape[0], self.hidden_dim).to(x.device)
 
         # forward pass
-        output, _ = self.model(embeds, (h0, c0))
+        output, _ = self.model(x, (h0, c0))
         output = self.activation(output)
         return output
 
 
 class Prot2Vec(nn.Module):
 
-    def __init__(self, protein_profile, embeddings, activation='relu'):
+    def __init__(self, protein_profile, embeddings, activation='relu', batch_first=False):
         super(Prot2Vec, self).__init__()
+        self._batch_first = batch_first
         self.protein_profile = protein_profile
-        self.embedding = embeddings
+        self.embeddings = embeddings
         self.activation = get_activation_func(activation)
 
     def forward(self, input):
-        # retrieve protein embedding profiles
-        x = [self.protein_profile[prot[1]].tolist() for prot in input]
-
-        # pad sequences
-        max_seq = max([len(p) for p in x])
-        x = [vec + [0] * (max_seq - len(vec)) for vec in x]
-        x = torch.tensor(x, dtype=torch.long).to(self.embedding.weight.device)
-
+        # get the embedding indices for this batch
+        x = _construct_embedding_indices(input, self.protein_profile, self.embeddings.weight.device,
+                                         self.embeddings.weight.shape[0] - 1)
         # get protein embeddings
-        embeddings = self.embedding(x)
-        embeddings = embeddings.permute(1, 0, 2)  # change into: [num_segments, batch_size, d_model]
+        embeddings = self.embeddings(x)
+        embeddings = embeddings.reshape(*embeddings.shape[:2], -1)
         embeddings = self.activation(embeddings)
+        if not self._batch_first:
+            embeddings = embeddings.permute(1, 0, 2)
         return embeddings
 
 
@@ -666,20 +650,12 @@ class TwoWayAttention(nn.Module):
 
     def __init__(self, dim1, dim2, activation=nonsat_activation):
         super(TwoWayAttention, self).__init__()
-        self.register_parameter('U', None)
         self.activation = activation
         self.U = nn.Parameter(torch.empty((dim1, dim2)))
         init.xavier_normal_(self.U)
 
     def forward(self, inputs):
         x1, x2 = inputs
-        x1_dim = x1.shape[-1]
-        x2_dim = x2.shape[-1]
-
-        # initialize trainable parameter
-        # if self.U is None:
-        #     self.U = nn.Parameter(torch.empty((x1_dim, x2_dim)).to(x1.device))
-        #     init.xavier_normal_(self.U)
 
         batch_sz = x1.shape[0]
         U = self.U.repeat(batch_sz, 1, 1)
@@ -690,11 +666,9 @@ class TwoWayAttention(nn.Module):
         cols, _ = torch.max(M, dim=1, keepdim=True)
         cols = cols.view(batch_sz, 1, -1)
         cols = torch.softmax(cols, dim=2)
-        x1 = rows.bmm(x1).squeeze()
-        x2 = cols.bmm(x2).squeeze()
-        x = torch.cat([x1, x2], dim=1)
-        x = self.activation(x)
-        return x
+        _x1 = rows.bmm(x1).squeeze()
+        _x2 = cols.bmm(x2).squeeze()
+        return _x1, _x2
 
 
 class JointAttention(nn.Module):
@@ -817,7 +791,7 @@ class SegmentWiseResBlock(nn.Module):
 class ProtCNN(nn.Module):
     """
     Implementation of the Protein CNN presented in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
-    credits to the work above for the initial implementation which this implementation builds on.
+    All credits to the work above for the initial implementation which this implementation builds on.
     """
 
     def __init__(self, protein_profile, embeddings, activation='relu', window=11, num_layers=3):

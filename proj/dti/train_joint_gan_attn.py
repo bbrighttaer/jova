@@ -109,7 +109,7 @@ def create_weave_net(hparams):
     )
     wg_args = WeaveGatherArgs(conv_out_depth=hparams["weave"]["dim"], gaussian_expand=True,
                               n_depth=hparams["weave"]["dim"])
-    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='1D')
+    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='2D')
     model = nn.Sequential(weave_model)
     return model
 
@@ -842,7 +842,7 @@ def default_hparams_bopt(flags):
     ------------|---------------------------------------------------------------------------
     NOTE: The p2v and rnn model types require pretrained protein embeddings.
     """
-    prot_model = "p2v"
+    prot_model = "psc"
     return {
         "attn_heads": 8,
         "attn_layers": 1,
@@ -904,7 +904,7 @@ def get_hparam_config(flags):
         "attn_layers": DiscreteParam(min=1, max=3),
         "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
         "latent_dim": ConstantParam(256),
-        "disc_hdims": DiscreteParam(min=100, max=2000, size=DiscreteParam(min=1, max=2)),
+        "disc_hdims": DiscreteParam(min=100, max=2048, size=DiscreteParam(min=1, max=2)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
@@ -912,9 +912,8 @@ def get_hparam_config(flags):
         "weighted_loss": RealParam(0.1, max=0.5),
 
         # dropout
-        "dprob": ConstantParam(0.1),
-        "disc_dprob": RealParam(0.1, max=0.5),
-        "neigh_dist": DiscreteParam(min=4, max=32),
+        "dprob": RealParam(0.1, max=0.5),
+        "neigh_dist": DiscreteParam(min=4, max=64),
 
         "tr_batch_size": ConstantParam(256),
         "val_batch_size": ConstantParam(128),
@@ -1075,6 +1074,11 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument("--fingerprint",
+                        default=None,
+                        type=str,
+                        help="The pickled python dictionary containing the fingerprint profiles of atoms and their"
+                             "neighbors")
 
     args = parser.parse_args()
     flags = Flags()

@@ -209,6 +209,12 @@ class WeaveGather(Layer):
 
 class WeaveGather2D(WeaveGather):
 
+    def __init__(self, *args, batch_first, **kwargs):
+        super(WeaveGather2D, self).__init__(*args, **kwargs)
+        # By default, the output structure of WeaveGather2D is (number_of_segments/seq, batch_size, d_model)
+        # If batch_first is set to True, then the output is reshaped as (batch_size, num_segments, d_model)
+        self._batch_first = batch_first
+
     def forward(self, input_data):
         outputs, pair_features, atom_split, n_atoms_lst = input_data
         if self.gaussian_expand:
@@ -221,6 +227,8 @@ class WeaveGather2D(WeaveGather):
         mols = outputs.split(n_atoms_lst)
         mols = [F.pad(m, (0, 0, 0, max_dim - m.shape[0])) for m in mols]
         outputs = torch.stack(mols, dim=1)
+        if self._batch_first:
+            outputs = outputs.permute(1, 0, 2)
         return outputs, pair_features
 
 
@@ -410,6 +418,12 @@ class GraphGather(Layer):
 
 class GraphGather2D(GraphGather):
 
+    def __init__(self, activation='tanh', batch_first=False):
+        super(GraphGather2D, self).__init__(activation)
+        # By default, the output structure of GraphGather2D is (number_of_segments/seq, batch_size, d_model)
+        # If batch_first is set to True, then the output is reshaped as (batch_size, num_segments, d_model)
+        self._batch_first = batch_first
+
     def forward(self, input_data, batch_size):
         atom_features, membership, n_atoms_lst = input_data[0], input_data[2], input_data[3]
         max_dim = max(n_atoms_lst)
@@ -418,6 +432,8 @@ class GraphGather2D(GraphGather):
         outputs = torch.stack(mols, dim=1)
         if self.activation:
             mol_features = self.activation(outputs) if self.activation else outputs
+        if self._batch_first:
+            mol_features = mol_features.permute(1, 0, 2)
         return mol_features
 
 
@@ -540,3 +556,100 @@ class Unsqueeze(nn.Module):
 
     def forward(self, x):
         return x.unsqueeze(dim=self.dim)
+
+
+class PreSiameseLinear(nn.Module):
+    """
+    Prepares inputs to a siamese net.
+    """
+
+    def __init__(self, dim1, dim2, out_dim, activation='relu'):
+        super(PreSiameseLinear, self).__init__()
+        self.linear1 = nn.Linear(dim1, out_features=out_dim)
+        self.linear2 = nn.Linear(dim2, out_features=out_dim)
+        self.activation = get_activation_func(activation)
+
+    def forward(self, inputs):
+        x1, x2 = inputs
+        return self.activation(self.linear1(x1)), self.activation(self.linear2(x2))
+
+
+class SiameseLinear(nn.Module):
+
+    def __init__(self, in_features, out_features, bias=True):
+        super(SiameseLinear, self).__init__()
+        self._linear = nn.Linear(in_features, out_features, bias)
+
+    def _forward(self, x):
+        return self._linear(x)
+
+    def forward(self, inputs):
+        x1, x2 = inputs
+        x1, x2 = self._forward(x1), self._forward(x2)
+        return x1, x2
+
+
+class SiameseNonlinearity(nn.Module):
+
+    def __init__(self, activation='relu'):
+        super(SiameseNonlinearity, self).__init__()
+        self._func = get_activation_func(activation)
+
+    def _forward(self, x):
+        return self._func(x)
+
+    def forward(self, inputs):
+        x1, x2 = inputs
+        x1, x2 = self._forward(x1), self._forward(x2)
+        return x1, x2
+
+
+class SiameseBatchNorm(nn.Module):
+
+    def __init__(self, dim):
+        super(SiameseBatchNorm, self).__init__()
+        self._batch_norm = nn.BatchNorm1d(dim)
+
+    def _forward(self, x):
+        return self._batch_norm(x)
+
+    def forward(self, inputs):
+        x1, x2 = inputs
+        x1, x2 = self._forward(x1), self._forward(x2)
+        return x1, x2
+
+
+class SiameseDropout(nn.Module):
+
+    def __init__(self, p=0.5, inplace=False):
+        super(SiameseDropout, self).__init__()
+        self._dropout = nn.Dropout(p, inplace)
+
+    def _forward(self, x):
+        return self._dropout(x)
+
+    def forward(self, inputs):
+        x1, x2 = inputs
+        x1, x2 = self._forward(x1), self._forward(x2)
+        return x1, x2
+
+
+class PairwiseDotProduct(nn.Module):
+
+    def __init__(self):
+        super(PairwiseDotProduct, self).__init__()
+
+    def forward(self, inputs):
+        """
+
+        :param inputs: list
+            A list of two 2D tensors with structure: (batch_size, feature_dimension) each.
+        :return:
+        """
+        x1, x2 = inputs
+        assert x1.shape == x2.shape, "Both tensors must have the same shapes"
+        prod = x1.mm(x2.t())
+        mask = torch.eye(prod.shape[0]).to(x1.device)
+        out = prod * mask
+        out = torch.sum(out, dim=1, keepdim=True)
+        return out
