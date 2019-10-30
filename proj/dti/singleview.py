@@ -35,6 +35,7 @@ from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential,
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.io import load_model, save_model
+from ivpgan.utils.math import ExpAverage
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.train_helpers import count_parameters
 
@@ -43,10 +44,9 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 seeds = [123, 124, 125]
 
-
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
-# torch.cuda.set_device(2)
+torch.cuda.set_device(3)
 
 
 def create_ecfp_net(hparams):
@@ -98,11 +98,11 @@ def create_weave_net(hparams):
                        dropout=hparams["dprob"],
                        activation='relu'),
     )
-    wg_args = WeaveGatherArgs(conv_out_depth=50, gaussian_expand=True, n_depth=128)
+    wg_args = WeaveGatherArgs(conv_out_depth=50, gaussian_expand=True, n_depth=hparams["graph_dim"])
     weave_model = WeaveModel(weave_args, wg_args)
 
     # FCN
-    civ_dim = hparams["prot_dim"] + 128
+    civ_dim = hparams["prot_dim"] + hparams["graph_dim"]
     fcn_args = []
     p = civ_dim
     fcn_layers = hparams["hdims"]
@@ -136,13 +136,13 @@ def create_gconv_net(hparams):
                                       nn.ReLU(),
                                       GraphPool(),
 
-                                      nn.Linear(in_features=64, out_features=128),
-                                      nn.BatchNorm1d(128),
+                                      nn.Linear(in_features=64, out_features=hparams["graph_dim"]),
+                                      nn.BatchNorm1d(hparams["graph_dim"]),
                                       nn.ReLU(),
                                       nn.Dropout(hparams["dprob"]),
                                       GraphGather())
     # FCN
-    civ_dim = hparams["prot_dim"] + 128 * 2
+    civ_dim = hparams["prot_dim"] + hparams["graph_dim"] * 2
     fcn_args = []
     p = civ_dim
     fcn_layers = hparams["hdims"]
@@ -268,13 +268,15 @@ class SingleViewDTI(Trainer):
 
     @staticmethod
     def train(eval_fn, model, optimizer, data_loaders, metrics, transformers_dict, prot_desc_dict, tasks, view,
-              n_iters=5000, sim_data_node=None):
+              n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None):
         start = time.time()
         best_model_wts = model.state_dict()
         best_score = -10000
         best_epoch = -1
+        terminate_training = False
+        e_avg = ExpAverage(.01)
         n_epochs = n_iters // len(data_loaders["train"])
-        scheduler = sch.StepLR(optimizer, step_size=40, gamma=0.01)
+        scheduler = sch.StepLR(optimizer, step_size=400, gamma=0.01)
         criterion = torch.nn.MSELoss()
 
         # sub-nodes of sim data resource
@@ -288,94 +290,106 @@ class SingleViewDTI(Trainer):
         # add sim data nodes to parent node
         if sim_data_node:
             sim_data_node.data = [train_loss_node, metrics_node, scores_node]
-
-        # Main training loop
-        for epoch in range(n_epochs):
-            for phase in ["train", "val"]:
-                if phase == "train":
-                    print("Training....")
-                    # Training mode
-                    model.train()
-                else:
-                    print("Validation...")
-                    # Evaluation mode
-                    model.eval()
-
-                data_size = 0.
-                epoch_losses = []
-                epoch_scores = []
-
-                # Iterate through mini-batches
-                i = 0
-                for batch in tqdm(data_loaders[phase]):
-                    batch_size, data = batch_collator(batch, prot_desc_dict, spec=view)
-                    # Data
-                    if view == "gconv":
-                        # graph data structure is: [(compound data, batch_size), protein_data]
-                        X = ((data[view][0][0], batch_size), data[view][0][1])
-                    else:
-                        X = data[view][0]
-                    y = data[view][1]
-                    w = data[view][2].reshape(-1, 1).astype(np.float)
-
-                    optimizer.zero_grad()
-
-                    # forward propagation
-                    # track history if only in train
-                    with torch.set_grad_enabled(phase == "train"):
-                        outputs = model(X)
-                        target = torch.from_numpy(y.astype(np.float)).view(-1, 1).float()
-                        if cuda:
-                            target = target.cuda()
-                        loss = criterion(outputs, target)
-
+        try:
+            # Main training loop
+            for epoch in range(n_epochs):
+                if terminate_training:
+                    print("Terminating training...")
+                    break
+                for phase in ["train", "val"]:
                     if phase == "train":
-                        print("\tEpoch={}/{}, batch={}/{}, loss={:.4f}".format(epoch + 1, n_epochs, i + 1,
-                                                                               len(data_loaders[phase]), loss.item()))
-                        # for epoch stats
-                        epoch_losses.append(loss.item())
-
-                        # for sim data resource
-                        loss_lst.append(loss.item())
-
-                        # optimization ops
-                        loss.backward()
-                        optimizer.step()
+                        print("Training....")
+                        # Training mode
+                        model.train()
                     else:
-                        if str(loss.item()) != "nan":  # useful in hyperparameter search
-                            eval_dict = {}
-                            score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict[view])
+                        print("Validation...")
+                        # Evaluation mode
+                        model.eval()
+
+                    data_size = 0.
+                    epoch_losses = []
+                    epoch_scores = []
+
+                    # Iterate through mini-batches
+                    i = 0
+                    for batch in tqdm(data_loaders[phase]):
+                        batch_size, data = batch_collator(batch, prot_desc_dict, spec=view)
+                        # Data
+                        if view == "gconv":
+                            # graph data structure is: [(compound data, batch_size), protein_data]
+                            X = ((data[view][0][0], batch_size), data[view][0][1])
+                        else:
+                            X = data[view][0][:2]
+                        y = data[view][1]
+                        w = data[view][2].reshape(-1, 1).astype(np.float)
+
+                        optimizer.zero_grad()
+
+                        # forward propagation
+                        # track history if only in train
+                        with torch.set_grad_enabled(phase == "train"):
+                            outputs = model(X)
+                            target = torch.from_numpy(y.astype(np.float)).view(-1, 1).float()
+                            if cuda:
+                                target = target.cuda()
+                            loss = criterion(outputs, target)
+
+                        if phase == "train":
+                            print("\tEpoch={}/{}, batch={}/{}, loss={:.4f}".format(epoch + 1, n_epochs, i + 1,
+                                                                                   len(data_loaders[phase]),
+                                                                                   loss.item()))
                             # for epoch stats
-                            epoch_scores.append(score)
+                            epoch_losses.append(loss.item())
 
                             # for sim data resource
-                            scores_lst.append(score)
-                            for m in eval_dict:
-                                if m in metrics_dict:
-                                    metrics_dict[m].append(eval_dict[m])
-                                else:
-                                    metrics_dict[m] = [eval_dict[m]]
+                            loss_lst.append(loss.item())
 
-                            print("\nEpoch={}/{}, batch={}/{}, "
-                                  "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
-                                                                            len(data_loaders[phase]),
-                                                                            eval_dict, score))
+                            # optimization ops
+                            loss.backward()
+                            optimizer.step()
+                        else:
+                            if str(loss.item()) != "nan":  # useful in hyperparameter search
+                                eval_dict = {}
+                                score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict[view])
+                                # for epoch stats
+                                epoch_scores.append(score)
 
-                    i += 1
-                    data_size += batch_size
-                # End of mini=batch iterations.
+                                # for sim data resource
+                                scores_lst.append(score)
+                                for m in eval_dict:
+                                    if m in metrics_dict:
+                                        metrics_dict[m].append(eval_dict[m])
+                                    else:
+                                        metrics_dict[m] = [eval_dict[m]]
 
-                if phase == "train":
-                    # Adjust the learning rate.
-                    scheduler.step()
-                    print("\nPhase: {}, avg task loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
-                else:
-                    mean_score = np.mean(epoch_scores)
-                    if best_score < mean_score:
-                        best_score = mean_score
-                        best_model_wts = copy.deepcopy(model.state_dict())
-                        best_epoch = epoch
+                                print("\nEpoch={}/{}, batch={}/{}, "
+                                      "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
+                                                                                len(data_loaders[phase]),
+                                                                                eval_dict, score))
+                            else:
+                                terminate_training = True
 
+                        i += 1
+                        data_size += batch_size
+                    # End of mini=batch iterations.
+                    if phase == "train":
+                        ep_loss = np.nanmean(epoch_losses)
+                        e_avg.update(ep_loss)
+                        if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
+                            if e_avg.value > epoch_ckpt[1]:
+                                terminate_training = True
+
+                        # Adjust the learning rate.
+                        scheduler.step()
+                        print("\nPhase: {}, avg task loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
+                    else:
+                        mean_score = np.mean(epoch_scores)
+                        if best_score < mean_score:
+                            best_score = mean_score
+                            best_model_wts = copy.deepcopy(model.state_dict())
+                            best_epoch = epoch
+        except RuntimeError as e:
+            print(str(e))
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
         model.load_state_dict(best_model_wts)
@@ -465,8 +479,8 @@ def main(flags):
         print("No views selected for training")
 
     for view in flags["views"]:
-        sim_label = "CUDA={}, view={}".format(cuda, view)
-        print(sim_label)
+        sim_label = "single_view_{}".format(view)
+        print("CUDA={}, {}".format(cuda, sim_label))
 
         # Simulation data resource tree
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
@@ -482,6 +496,9 @@ def main(flags):
         cuda_devices = None if num_cuda_dvcs == 1 else [i for i in range(1, num_cuda_dvcs)]
 
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
+
+        # For searching over multiple seeds
+        hparam_search = None
 
         for seed in seeds:
             # for data collection of this round of simulation.
@@ -530,40 +547,42 @@ def main(flags):
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
-                                    "n_iters": 10000,
+                                    "n_iters": 3000,
                                     "view": view}
 
                 hparams_conf = get_hparam_config(flags, view)
 
-                search_alg = {"random_search": RandomSearchCV,
-                              "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
-                                                                        BayesianOptSearchCV)
+                if hparam_search is None:
+                    search_alg = {"random_search": RandomSearchCV,
+                                  "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
+                                                                            BayesianOptSearchCV)
+                    min_opt = "gp"
+                    hparam_search = search_alg(hparam_config=hparams_conf,
+                                               num_folds=k,
+                                               initializer=trainer.initialize,
+                                               data_provider=trainer.data_provider,
+                                               train_fn=trainer.train,
+                                               eval_fn=trainer.evaluate,
+                                               save_model_fn=io.save_model,
+                                               init_args=extra_init_args,
+                                               data_args=extra_data_args,
+                                               train_args=extra_train_args,
+                                               data_node=data_node,
+                                               split_label=split_label,
+                                               sim_label=sim_label,
+                                               minimizer=min_opt,
+                                               dataset_label=dataset_lbl,
+                                               results_file="{}_{}_dti_{}_{}.csv".format(
+                                                   flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                hparam_search = search_alg(hparam_config=hparams_conf,
-                                           num_folds=k,
-                                           initializer=trainer.initialize,
-                                           data_provider=trainer.data_provider,
-                                           train_fn=trainer.train,
-                                           eval_fn=trainer.evaluate,
-                                           save_model_fn=io.save_model,
-                                           init_args=extra_init_args,
-                                           data_args=extra_data_args,
-                                           train_args=extra_train_args,
-                                           data_node=data_node,
-                                           split_label=split_label,
-                                           sim_label=view,
-                                           dataset_label=dataset_lbl,
-                                           results_file="{}_{}_dti_{}.csv".format(flags["hparam_search_alg"], view,
-                                                                                  date_label))
-
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
 
         # save simulation data resource tree to file.
-        sim_data.to_json(path="./analysis/")
+        # sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view):
@@ -597,8 +616,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     else:
         # Train the model
         model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics,
-                                            transformers_dict,
-                                            prot_desc_dict, tasks, n_iters=10000, view_lbl=view,
+                                            transformers_dict, prot_desc_dict, tasks, n_iters=10000, view=view,
                                             sim_data_node=sim_data_node)
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
@@ -673,6 +691,7 @@ def get_hparam_config(flags, view):
         "prot_dim": ConstantParam(8421),
         "comp_dim": ConstantParam(1024),
         "hdims": DiscreteParam(min=256, max=5000, size=DiscreteParam(min=1, max=4)),
+        "graph_dim": DiscreteParam(min=64, max=512),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),  # DiscreteParam(min=2, max=9),

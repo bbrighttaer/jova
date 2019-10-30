@@ -617,6 +617,8 @@ class Prot2Vec(nn.Module):
         super(Prot2Vec, self).__init__()
         self._batch_first = batch_first
         self.protein_profile = protein_profile
+        # shape = embeddings.weight.shape
+        # self.embeddings = nn.Embedding(shape[0], shape[1])
         self.embeddings = embeddings
         self.activation = get_activation_func(activation)
 

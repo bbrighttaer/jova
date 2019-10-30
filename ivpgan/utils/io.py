@@ -31,6 +31,7 @@ def get_logger(name=None, level='INFO', stream='stderr', filename=None, log_dir=
     :return: The created logger
     :param stream: Either 'stderr' or 'stdout'
     """
+    os.makedirs(log_dir, exist_ok=True)
     stream = sys.stderr if stream == 'stderr' else sys.stdout
     log_level = {'DEBUG': logging.DEBUG,
                  'INFO': logging.INFO,
@@ -39,8 +40,6 @@ def get_logger(name=None, level='INFO', stream='stderr', filename=None, log_dir=
                  'CRITICAL': logging.CRITICAL}.get(level.upper(), 'INFO')
     handlers = []
     if filename:
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
         handlers.append(logging.FileHandler(os.path.join(log_dir, filename + '.log')))
     if stream:
         handlers.append(logging.StreamHandler(stream))
