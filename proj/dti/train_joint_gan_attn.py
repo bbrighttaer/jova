@@ -49,9 +49,9 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filen
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [1, 8, 64]
+seeds = [1, 8, 64]
 
-seeds = [123, 124, 125]
+# seeds = [123, 124, 125]
 
 check_data = False
 
@@ -165,7 +165,8 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
 
     layers = [NwayForward(models=views.values())]
 
-    seg_dims = [hparams[c]["dim"] for c in views.keys()]
+    seg_dims = [hparams[c]["dim"] for c in list(views.keys())[:-1]]
+    seg_dims.append(hparams["prot"]["rnn_hidden_state_dim"])
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
@@ -643,7 +644,8 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    sim_label = "integrated_view_gan_attn"
+    flags["prot_model_type"] = "rnn"
+    sim_label = "integrated_view_gan_attn_" + flags["prot_model_type"]
     print("CUDA={}, view={}".format(cuda, sim_label))
 
     # Simulation data resource tree
@@ -861,7 +863,7 @@ def default_hparams_bopt(flags):
     ------------|---------------------------------------------------------------------------
     NOTE: The p2v and rnn model types require pretrained protein embeddings.
     """
-    prot_model = "rnn"
+    # prot_model = "rnn"
     return {
         "attn_heads": 8,
         "attn_layers": 1,
@@ -895,9 +897,9 @@ def default_hparams_bopt(flags):
         "optimizer_disc__global__lr": 0.464296,
 
         "prot": {
-            "model_type": prot_model,
+            "model_type": flags["prot_model_type"],
             "in_dim": 8421,
-            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
+            "dim": 8421 if flags["prot_model_type"] == "psc" else flags["embeddings_dim"],
             "vocab_size": flags["prot_vocab_size"],
             "window": 11,
             "rnn_hidden_state_dim": 100
@@ -916,7 +918,7 @@ def default_hparams_bopt(flags):
 
 
 def get_hparam_config(flags):
-    prot_model = "psc"
+    # prot_model = "psc"
     return {
         "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
@@ -946,13 +948,13 @@ def get_hparam_config(flags):
         "optimizer_disc__global__weight_decay": LogRealParam(),
         "optimizer_disc__global__lr": LogRealParam(),
 
-        "prot": ConstantParam({
-            "model_type": prot_model,
-            "in_dim": 8421,
-            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
-            "vocab_size": flags["prot_vocab_size"],
-            "window": 11,
-            "rnn_hidden_state_dim": 100
+        "prot": DictParam({
+            "model_type": ConstantParam(flags["prot_model_type"]),
+            "in_dim": ConstantParam(8421),
+            "dim": ConstantParam(8421 if flags["prot_model_type"] == "psc" else flags["embeddings_dim"]),
+            "vocab_size": ConstantParam(flags["prot_vocab_size"]),
+            "window": ConstantParam(11),
+            "rnn_hidden_state_dim": DiscreteParam(min=50, max=512)
         }),
         "weave": DictParam({
             # "dim": DiscreteParam(min=64, max=512),
