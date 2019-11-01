@@ -594,6 +594,7 @@ class ProteinRNN(nn.Module):
         self.num_layers = int(num_layers)
         self.directions = max(1, int(bidrectional) + 1)
         self.activation = get_activation_func(activation)
+        self.batch_first = batch_first
         if num_layers == 1:
             dropout = 0
         self.model = nn.LSTM(input_size=in_dim, hidden_size=self.hidden_dim, num_layers=self.num_layers,
@@ -602,8 +603,9 @@ class ProteinRNN(nn.Module):
     def forward(self, x):
         # RNN initial states
         # (layer_dim * num_directions, batch_size, hidden_dim)
-        h0 = torch.zeros(self.num_layers * self.directions, x.shape[0], self.hidden_dim).to(x.device)
-        c0 = torch.zeros(self.num_layers * self.directions, x.shape[0], self.hidden_dim).to(x.device)
+        batch_sz = x.shape[0] if self.batch_first else x.shape[1]
+        h0 = torch.zeros(self.num_layers * self.directions, batch_sz, self.hidden_dim).to(x.device)
+        c0 = torch.zeros(self.num_layers * self.directions, batch_sz, self.hidden_dim).to(x.device)
 
         # forward pass
         output, _ = self.model(x, (h0, c0))

@@ -49,11 +49,13 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filen
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
+# seeds = [1, 8, 64]
+
 seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(2)
 
 use_ecfp8 = True
 use_weave = False
@@ -74,11 +76,11 @@ def create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models_
         pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
                                        embeddings=pt_embeddings,
-                                       batch_first=True),
+                                       batch_first=False),
                               ProteinRNN(in_dim=hparams["prot"]["dim"] * hparams["prot"]["window"],
                                          hidden_dim=hparams["prot"]["rnn_hidden_state_dim"],
                                          dropout=hparams["dprob"],
-                                         batch_first=True))
+                                         batch_first=False))
     elif hparams["prot"]["model_type"].lower() == "p2v":
         pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = Prot2Vec(protein_profile=protein_profile, embeddings=pt_embeddings, batch_first=True)
@@ -222,8 +224,8 @@ class IntegratedViewDTI(Trainer):
                 generator = generator.cuda()
                 discriminator = discriminator.cuda()
         except:  # todo: Remove this after hyperparameter search
-            generator = nn.Sequential(nn.Identity())
-            discriminator = nn.Sequential(nn.Identity())
+            generator = nn.Sequential(nn.Linear(10, 10))
+            discriminator = nn.Sequential(nn.Linear(10, 10))
 
         # data loaders
         train_data_loader = DataLoader(dataset=train_dataset,
@@ -537,7 +539,7 @@ class IntegratedViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(generator.state_dict())
                             best_epoch = epoch
-        except RuntimeError as e:
+        except Exception as e:
             print(str(e))
 
         duration = time.time() - start
@@ -859,7 +861,7 @@ def default_hparams_bopt(flags):
     ------------|---------------------------------------------------------------------------
     NOTE: The p2v and rnn model types require pretrained protein embeddings.
     """
-    prot_model = "psc"
+    prot_model = "rnn"
     return {
         "attn_heads": 8,
         "attn_layers": 1,
@@ -921,7 +923,7 @@ def get_hparam_config(flags):
         "attn_layers": DiscreteParam(min=1, max=3),
         "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
         "latent_dim": ConstantParam(256),
-        "disc_hdims": DiscreteParam(min=100, max=2048, size=DiscreteParam(min=1, max=3)),
+        "disc_hdims": DiscreteParam(min=100, max=2048, size=DiscreteParam(min=1, max=2)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
@@ -930,7 +932,7 @@ def get_hparam_config(flags):
 
         # dropout
         "dprob": RealParam(0.1, max=0.5),
-        "neigh_dist": DiscreteParam(min=4, max=100),
+        "neigh_dist": DiscreteParam(min=4, max=64),
 
         "tr_batch_size": ConstantParam(256),
         "val_batch_size": ConstantParam(128),
