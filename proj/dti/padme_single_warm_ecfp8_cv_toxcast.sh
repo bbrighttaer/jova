@@ -1,0 +1,1 @@
+python singleview.py --dataset toxcast --prot_desc_path ../../data/full_toxcast/prot_desc.csv --model_dir ./model_dir/toxcast --filter_threshold 0 --split_warm --view ecfp8 --fold_num 5

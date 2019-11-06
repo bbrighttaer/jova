@@ -47,7 +47,9 @@ from ivpgan.utils.io import load_pickle, load_numpy_array
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [123, 124, 125]
+seeds = [1, 8, 64]
+
+# seeds = [123, 124, 125]
 
 check_data = False
 
@@ -57,7 +59,7 @@ use_ecfp8 = True
 use_weave = False
 use_gconv = True
 use_prot = True
-use_gnn = True
+use_gnn = False
 
 
 def create_ecfp_net(hparams):
@@ -179,7 +181,7 @@ def create_integrated_net(hparams):
         p = dim
 
     # Output layer
-    layers.append(nn.Linear(in_features=p, out_features=1))
+    layers.append(nn.Linear(in_features=p, out_features=hparams["output_dim"]))
 
     # Build model
     model = nn.Sequential(*layers)
@@ -272,7 +274,6 @@ class IntegratedViewDTI(Trainer):
 
     @staticmethod
     def evaluate(eval_dict, y, y_pred, w, metrics, tasks, transformers):
-        y = y.reshape(-1, 1).astype(np.float)
         eval_dict.update(compute_model_performance(metrics, y_pred.cpu().detach().numpy(), y, w, transformers,
                                                    tasks=tasks))
         # scoring
@@ -363,15 +364,15 @@ class IntegratedViewDTI(Trainer):
                                         Xs["gconv"] = x
                                     else:
                                         Xs[view_name] = view_data[0]
-                                    Ys[view_name] = view_data[1]
-                                    Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
+                                    Ys[view_name] = np.array([k for k in view_data[1]], dtype=np.float)
+                                    Ws[view_name] = np.array([k for k in view_data[2]], dtype=np.float)
 
                                 optimizer.zero_grad()
 
                                 # forward propagation
                                 # track history if only in train
                                 with torch.set_grad_enabled(phase == "train"):
-                                    Ys = {k: Ys[k].astype(np.float) for k in Ys}
+                                    Ys = {k: Ys[k] for k in Ys}
                                     # Ensure matching labels across views.
                                     for j in range(1, len(Ys.values())):
                                         assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
@@ -393,11 +394,12 @@ class IntegratedViewDTI(Trainer):
                                         X.append(protein_x)
 
                                     outputs = model(X)
-                                    target = torch.from_numpy(y).view(-1, 1).float()
-                                    valid = torch.ones_like(target).float()
-                                    fake = torch.zeros_like(target).float()
+                                    target = torch.from_numpy(y).float()
+                                    weights = torch.from_numpy(w).float()
                                     if cuda:
                                         target = target.cuda()
+                                        weights = weights.cuda()
+                                    outputs = outputs * weights
                                     loss = prediction_criterion(outputs, target)
 
                                 if phase == "train":
@@ -598,9 +600,9 @@ def main(flags):
     hparam_search = None
 
     for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
-                                                                                          dt.now().strftime(
-                                                                                              "%Y_%m_%d__%H_%M_%S")))
+        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_sim_runs/{}_{}_{}/".format(sim_label, seed,
+                                                                                              dt.now().strftime(
+                                                                                                  "%Y_%m_%d__%H_%M_%S")))
 
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -634,6 +636,8 @@ def main(flags):
             transformers_dict["gnn"] = data_dict["gnn"][2]
 
         tasks = data_dict[list(data_dict.keys())[0]][0]
+        # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
+        flags["tasks"] = tasks
 
         trainer = IntegratedViewDTI()
 
@@ -801,11 +805,12 @@ def default_hparams_bopt(flags):
     ------------|---------------------------------------------------------------------------
     NOTE: The p2v and rnn model types require pretrained protein embeddings.
     """
-    prot_model = "p2v"
+    prot_model = "psc"
     return {
-        "attn_heads": 8,
+        "attn_heads": 4,
         "attn_layers": 1,
-        "lin_dims": [2048, 911, 64],
+        "lin_dims": [1424, 64],
+        "output_dim": len(flags.tasks),
         "latent_dim": 256,
 
         # weight initialization
@@ -819,9 +824,9 @@ def default_hparams_bopt(flags):
         "test_batch_size": 128,
 
         # optimizer params
-        "optimizer": "adam",
-        "optimizer__global__weight_decay": 0.00016805292000620113,
-        "optimizer__global__lr": 0.0001,
+        "optimizer": "adamax",
+        "optimizer__global__weight_decay": 0.0009,
+        "optimizer__global__lr": 0.0006,
         "prot": {
             "model_type": prot_model,
             "in_dim": 8421,

@@ -46,7 +46,7 @@ seeds = [123, 124, 125]
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
-torch.cuda.set_device(3)
+torch.cuda.set_device(0)
 
 
 def create_ecfp_net(hparams):
@@ -64,7 +64,7 @@ def create_ecfp_net(hparams):
                        dropout=hparams["dprob"])
         fcn_args.append(conf)
         p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
+    fcn_args.append(FcnArgs(in_features=p, out_features=hparams["output_dim"]))
     layers = [ConcatLayer(dim=1)] + create_fcn_layers(fcn_args)
     model = nn.Sequential(*layers)
     return model
@@ -116,7 +116,7 @@ def create_weave_net(hparams):
                        dropout=hparams["dprob"])
         fcn_args.append(conf)
         p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
+    fcn_args.append(FcnArgs(in_features=p, out_features=hparams["output_dim"]))
     fcn_layers = create_fcn_layers(fcn_args)
 
     model = nn.Sequential(PairSequential(mod1=(weave_model,),
@@ -156,7 +156,7 @@ def create_gconv_net(hparams):
                        dropout=hparams["dprob"])
         fcn_args.append(conf)
         p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
+    fcn_args.append(FcnArgs(in_features=p, out_features=hparams["output_dim"]))
     fcn_layers = create_fcn_layers(fcn_args)
 
     model = nn.Sequential(PairSequential(mod1=(gconv_model,),
@@ -256,7 +256,6 @@ class SingleViewDTI(Trainer):
 
     @staticmethod
     def evaluate(eval_dict, y, y_pred, w, metrics, tasks, transformers):
-        y = y.reshape(-1, 1).astype(np.float)
         eval_dict.update(compute_model_performance(metrics, y_pred.cpu().detach().numpy(), y, w, transformers,
                                                    tasks=tasks))
         # scoring
@@ -321,7 +320,9 @@ class SingleViewDTI(Trainer):
                         else:
                             X = data[view][0][:2]
                         y = data[view][1]
-                        w = data[view][2].reshape(-1, 1).astype(np.float)
+                        w = data[view][2]
+                        y = np.array([k for k in y], dtype=np.float)
+                        w = np.array([k for k in w], dtype=np.float)
 
                         optimizer.zero_grad()
 
@@ -329,9 +330,12 @@ class SingleViewDTI(Trainer):
                         # track history if only in train
                         with torch.set_grad_enabled(phase == "train"):
                             outputs = model(X)
-                            target = torch.from_numpy(y.astype(np.float)).view(-1, 1).float()
+                            target = torch.from_numpy(y).float()
+                            weights = torch.from_numpy(w).float()
                             if cuda:
                                 target = target.cuda()
+                                weights = weights.cuda()
+                            outputs = outputs * weights
                             loss = criterion(outputs, target)
 
                         if phase == "train":
@@ -525,6 +529,8 @@ def main(flags):
             transformers_dict[view] = data_dict[view][2]
 
             tasks = data_dict[view][0]
+            # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
+            flags["tasks"] = tasks
 
             trainer = SingleViewDTI()
 
@@ -666,6 +672,7 @@ def default_hparams_bopt(flags, view):
         "prot_dim": 8421,
         "comp_dim": 1024,
         "hdims": [653, 3635],
+        "output_dim": len(flags["tasks"]),
 
         # weight initialization
         "kaiming_constant": 5,

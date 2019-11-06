@@ -9,13 +9,14 @@ import deepchem
 import padme
 import pandas as pd
 
+from feat.gnnfeat import GNNFeaturizer
+
 
 def load_toxcast(featurizer='Weave', cross_validation=False, test=False, split='random',
                  reload=True, K=5, mode='regression', predict_cold=False, cold_drug=False,
                  cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
-                 prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True):
-    # The last parameter means only splitting into training and validation sets.
-
+                 prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True, seed=0,
+                 gnn_radius=2):
     if cross_validation:
         assert not test
     data_dir = currdir + "full_toxcast/"
@@ -60,11 +61,11 @@ def load_toxcast(featurizer='Weave', cross_validation=False, test=False, split='
             delim = "_oversp" + delim
         if cross_validation:
             delim = "_CV" + delim
-            save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split)
+            save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
             loaded, all_dataset, transformers = padme.utils.save.load_cv_dataset_from_disk(
                 save_dir, K)
         else:
-            save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split)
+            save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
             loaded, all_dataset, transformers = padme.utils.save.load_dataset_from_disk(
                 save_dir)
         if loaded:
@@ -72,16 +73,23 @@ def load_toxcast(featurizer='Weave', cross_validation=False, test=False, split='
 
     if featurizer == 'Weave':
         featurizer = padme.feat.WeaveFeaturizer()
-    elif featurizer == 'ECFP':
-        featurizer = padme.feat.CircularFingerprint(size=1024)
+    elif featurizer == 'ECFP4':
+        featurizer = padme.feat.CircularFingerprint(size=1024, radius=2)
+    elif featurizer == 'ECFP8':
+        featurizer = padme.feat.CircularFingerprint(size=1024, radius=4)
     elif featurizer == 'GraphConv':
         featurizer = padme.feat.ConvMolFeaturizer()
+    elif featurizer == 'GNN':
+        featurizer = GNNFeaturizer(radius=gnn_radius)
 
     loader = padme.data.CSVLoader(
         tasks=tasks, smiles_field="smiles", protein_field="proteinName",
-        source_field='protein_dataset', featurizer=featurizer, prot_seq_dict=prot_seq_dict,
-        input_protein=input_protein)
+        source_field='protein_dataset', featurizer=featurizer, prot_seq_dict=prot_seq_dict)
     dataset = loader.featurize(dataset_file, shard_size=8192)
+
+    # Save GNN info needed at runtime
+    if isinstance(featurizer, GNNFeaturizer):
+        featurizer.save_featurization_info(data_dir)
 
     if mode == 'regression':
         transformers = [
@@ -111,24 +119,23 @@ def load_toxcast(featurizer='Weave', cross_validation=False, test=False, split='
     }
     splitter = splitters[split]
     if test:
-        train, valid, test = splitter.train_valid_test_split(dataset)
+        train, valid, test = splitter.train_valid_test_split(dataset, seed=seed)
         all_dataset = (train, valid, test)
         if reload:
             padme.utils.save.save_dataset_to_disk(save_dir, train, valid, test,
                                                   transformers)
     elif cross_validation:
-        fold_datasets = splitter.k_fold_split(dataset, K)
+        fold_datasets = splitter.k_fold_split(dataset, K, seed=seed)
         all_dataset = fold_datasets
         if reload:
             padme.utils.save.save_cv_dataset_to_disk(save_dir, all_dataset, K, transformers)
 
     else:
         # not cross validating, and not testing.
-        train, valid, test = splitter.train_valid_test_split(dataset, frac_train=0.9, frac_valid=0.1,
-                                                             frac_test=0)
+        train, valid, test = splitter.train_valid_test_split(dataset, frac_train=0.9, frac_valid=0.1, frac_test=0,
+                                                             seed=seed)
         all_dataset = (train, valid, test)
         if reload:
-            padme.utils.save.save_dataset_to_disk(save_dir, train, valid, test,
-                                                  transformers)
+            padme.utils.save.save_dataset_to_disk(save_dir, train, valid, test, transformers)
 
     return tasks, all_dataset, transformers

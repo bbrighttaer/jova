@@ -55,7 +55,7 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 
 use_ecfp8 = True
 use_weave = False
@@ -166,7 +166,8 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
     layers = [NwayForward(models=views.values())]
 
     seg_dims = [hparams[c]["dim"] for c in list(views.keys())[:-1]]
-    seg_dims.append(hparams["prot"]["rnn_hidden_state_dim"])
+    seg_dims.append(
+        hparams["prot"]["rnn_hidden_state_dim"] if hparams["prot"]["model_type"] == "rnn" else hparams["prot"]["dim"])
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
@@ -180,7 +181,7 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
         p = dim
 
     # Output layer
-    layers.append(nn.Linear(in_features=p, out_features=1))
+    layers.append(nn.Linear(in_features=p, out_features=hparams["output_dim"]))
 
     # Build model
     model = nn.Sequential(*layers)
@@ -220,13 +221,13 @@ class IntegratedViewDTI(Trainer):
         print("Number of trainable parameters: generator={}, discriminator={}".format(count_parameters(generator),
                                                                                       count_parameters(discriminator)))
 
-        try:
-            if cuda:
-                generator = generator.cuda()
-                discriminator = discriminator.cuda()
-        except:  # todo: Remove this after hyperparameter search
-            generator = nn.Sequential(nn.Linear(10, 10))
-            discriminator = nn.Sequential(nn.Linear(10, 10))
+        # try:
+        if cuda:
+            generator = generator.cuda()
+            discriminator = discriminator.cuda()
+        # except:  # todo: Remove this after hyperparameter search
+        #     generator = nn.Sequential(nn.Linear(10, 10))
+        #     discriminator = nn.Sequential(nn.Linear(10, 10))
 
         # data loaders
         train_data_loader = DataLoader(dataset=train_dataset,
@@ -312,7 +313,6 @@ class IntegratedViewDTI(Trainer):
 
     @staticmethod
     def evaluate(eval_dict, y, y_pred, w, metrics, tasks, transformers):
-        y = y.reshape(-1, 1).astype(np.float)
         eval_dict.update(compute_model_performance(metrics, y_pred.cpu().detach().numpy(), y, w, transformers,
                                                    tasks=tasks))
         # scoring
@@ -409,8 +409,8 @@ class IntegratedViewDTI(Trainer):
                                         Xs["gconv"] = x
                                     else:
                                         Xs[view_name] = view_data[0]
-                                    Ys[view_name] = view_data[1]
-                                    Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
+                                    Ys[view_name] = np.array([k for k in view_data[1]], dtype=np.float)
+                                    Ws[view_name] = np.array([k for k in view_data[2]], dtype=np.float)
 
                                 optimizer_gen.zero_grad()
                                 optimizer_disc.zero_grad()
@@ -418,7 +418,7 @@ class IntegratedViewDTI(Trainer):
                                 # forward propagation
                                 # track history if only in train
                                 with torch.set_grad_enabled(phase == "train"):
-                                    Ys = {k: Ys[k].astype(np.float) for k in Ys}
+                                    Ys = {k: Ys[k] for k in Ys}
                                     # Ensure corresponding pairs
                                     for j in range(1, len(Ys.values())):
                                         assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
@@ -440,13 +440,16 @@ class IntegratedViewDTI(Trainer):
                                         X.append(protein_x)
 
                                     outputs = generator(X)
-                                    target = torch.from_numpy(y).view(-1, 1).float()
+                                    target = torch.from_numpy(y).float()
+                                    weights = torch.from_numpy(w).float()
                                     valid = torch.ones_like(target).float()
                                     fake = torch.zeros_like(target).float()
                                     if cuda:
                                         target = target.cuda()
+                                        weights = weights.cuda()
                                         valid = valid.cuda()
                                         fake = fake.cuda()
+                                    outputs = outputs * weights
                                     pred_loss = prediction_criterion(outputs, target)
 
                                     # (Hyperparameter search hack - avoids problems with BCE criterion receiving nans.
@@ -672,9 +675,9 @@ def main(flags):
     hparam_search = None
 
     for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
-                                                                                          dt.now().strftime(
-                                                                                              "%Y_%m_%d__%H_%M_%S")))
+        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_sim_runs/{}_{}_{}/".format(sim_label, seed,
+                                                                                              dt.now().strftime(
+                                                                                                  "%Y_%m_%d__%H_%M_%S")))
 
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -705,6 +708,8 @@ def main(flags):
             transformers_dict["gconv"] = data_dict["gconv"][2]
 
         tasks = data_dict[list(data_dict.keys())[0]][0]
+        # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
+        flags["tasks"] = tasks
 
         trainer = IntegratedViewDTI()
 
@@ -869,6 +874,7 @@ def default_hparams_bopt(flags):
         "attn_heads": 4,
         "attn_layers": 1,
         "lin_dims": [1424, 64],
+        "output_dim": len(flags.tasks),
         "latent_dim": 256,
         "disc_hdims": [365, ],
 

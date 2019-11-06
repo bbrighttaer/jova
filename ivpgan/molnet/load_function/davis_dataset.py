@@ -18,8 +18,6 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
                cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
                prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True, seed=0,
                gnn_radius=2):
-    # The last parameter means only splitting into training and validation sets.
-
     if cross_validation:
         assert not test
     data_dir = currdir + "davis_data/"
@@ -112,6 +110,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
                                         cold_target=cold_target, cold_drug_cluster=cold_drug_cluster,
                                         split_warm=split_warm,
                                         prot_seq_dict=prot_seq_dict, threshold=filter_threshold,
+                                        oversampled=oversampled,
                                         input_protein=input_protein),
         'scaffold': deepchem.splits.ScaffoldSplitter(),
         'butina': deepchem.splits.ButinaSplitter(),
