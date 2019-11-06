@@ -97,7 +97,7 @@ if __name__ == '__main__':
                              'in the ProtVec embeddings')
     parser.add_argument('--window',
                         type=int,
-                        required=True,
+                        default=32,
                         help='The window for forming protein sub-sequences from the n-grams')
     # parser.add_argument('--dim',
     #                     type=int,

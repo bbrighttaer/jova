@@ -715,7 +715,7 @@ class JointAttention(nn.Module):
         # Gets number of segments in each view
         num_segs = [x.shape[0] for x in inputs]
 
-        # projection of segments into low dimensional space
+        # projection of segments into same dimensional space
         xs = [(self.lin_prjs[i](x.reshape(-1, x.shape[-1]))).reshape(*x.shape[:2], -1) for i, x in enumerate(inputs)]
 
         # join all segments along the 'seq' dimension
@@ -738,6 +738,7 @@ class JointAttention(nn.Module):
 
         # compute view representations
         xs = torch.split(x, num_segs, 0)
+        # pooling
         xs = [torch.sum(x, 0) for x in xs]
 
         # concat view reps

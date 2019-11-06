@@ -55,7 +55,7 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 use_ecfp8 = True
 use_weave = False
@@ -644,7 +644,7 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    flags["prot_model_type"] = "rnn"
+    flags["prot_model_type"] = "psc"
     sim_label = "integrated_view_gan_attn_" + flags["prot_model_type"]
     print("CUDA={}, view={}".format(cuda, sim_label))
 
@@ -865,36 +865,34 @@ def default_hparams_bopt(flags):
     """
     # prot_model = "rnn"
     return {
-        "attn_heads": 8,
+        "prot_vocab_size": flags["prot_vocab_size"],
+        "attn_heads": 4,
         "attn_layers": 1,
-        "lin_dims": [2048, 911, 64],
+        "lin_dims": [1424, 64],
         "latent_dim": 256,
-        "disc_hdims": [724, 561],
+        "disc_hdims": [365, ],
 
         # weight initialization
         "kaiming_constant": 5,
 
-        "weighted_loss": 0.3,
+        "weighted_loss": 0.1,
 
         # dropout
         "dprob": 0.1,
-        "disc_dprob": 0.137044,
 
-        "neigh_dist": 10,
+        "neigh_dist": 56,
 
         "tr_batch_size": 256,
-        "val_batch_size": 512,
-        "test_batch_size": 512,
+        "val_batch_size": 128,
+        "test_batch_size": 128,
 
         # optimizer params
-        "optimizer_gen": "adam",
-        "optimizer_gen__global__weight_decay": 0.00016805292000620113,
-        "optimizer_gen__global__lr": 0.0001,
-        "optimizer_gen__adadelta__rho": 0.115873,
-        "optimizer_gen__adagrad__lr_decay": 0.000496165,
-        "optimizer_disc": "adadelta",
-        "optimizer_disc__global__weight_decay": 0.0540819,
-        "optimizer_disc__global__lr": 0.464296,
+        "optimizer_gen": "adamax",
+        "optimizer_gen__global__weight_decay": 0.0009,
+        "optimizer_gen__global__lr": 0.0006,
+        "optimizer_disc": "sgd",
+        "optimizer_disc__global__weight_decay": 1.0,
+        "optimizer_disc__global__lr": 0.0001,
 
         "prot": {
             "model_type": flags["prot_model_type"],
@@ -922,10 +920,10 @@ def get_hparam_config(flags):
     return {
         "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
-        "attn_layers": DiscreteParam(min=1, max=3),
-        "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
+        "attn_layers": DiscreteParam(min=1, max=2),
+        "lin_dims": DiscreteParam(min=64, max=1048, size=DiscreteParam(min=1, max=2)),
         "latent_dim": ConstantParam(256),
-        "disc_hdims": DiscreteParam(min=100, max=2048, size=DiscreteParam(min=1, max=2)),
+        "disc_hdims": DiscreteParam(min=100, max=1048, size=DiscreteParam(min=1, max=2)),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
@@ -953,7 +951,7 @@ def get_hparam_config(flags):
             "in_dim": ConstantParam(8421),
             "dim": ConstantParam(8421 if flags["prot_model_type"] == "psc" else flags["embeddings_dim"]),
             "vocab_size": ConstantParam(flags["prot_vocab_size"]),
-            "window": ConstantParam(11),
+            "window": ConstantParam(32),
             "rnn_hidden_state_dim": DiscreteParam(min=50, max=512)
         }),
         "weave": DictParam({

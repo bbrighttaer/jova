@@ -61,10 +61,10 @@ def save_model(model, path, name):
     :return:
     """
     os.makedirs(path, exist_ok=True)
-    # file = os.path.join(path, name + ".mod")
-    # torch.save(model.state_dict(), file)
-    with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
-        f.write(name + '\n')
+    file = os.path.join(path, name + ".mod")
+    torch.save(model.state_dict(), file)
+    # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
+    #     f.write(name + '\n')
 
 
 def load_model(path, name):
