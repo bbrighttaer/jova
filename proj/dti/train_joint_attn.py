@@ -56,10 +56,10 @@ check_data = False
 torch.cuda.set_device(0)
 
 use_ecfp8 = True
-use_weave = False
+use_weave = True
 use_gconv = True
 use_prot = True
-use_gnn = False
+use_gnn = True
 
 
 def create_ecfp_net(hparams):
@@ -67,16 +67,22 @@ def create_ecfp_net(hparams):
     return model
 
 
-def create_prot_net(hparams, frozen_models_hook=None):
+def create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models_hook=None):
+    assert protein_profile is not None, "Protein profile has to be supplied"
+    assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
+
     if hparams["prot"]["model_type"].lower() == "rnn":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, hparams["prot"]["protein_embeddings"])
-        model = ProteinRNN(protein_profile=hparams["prot"]["protein_profile"],
-                           embeddings=pt_embeddings,
-                           hidden_dim=hparams["prot"]["hidden_dim"],
-                           dropout=hparams["dprob"])
+        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
+                                       embeddings=pt_embeddings,
+                                       batch_first=False),
+                              ProteinRNN(in_dim=hparams["prot"]["dim"] * hparams["prot"]["window"],
+                                         hidden_dim=hparams["prot"]["rnn_hidden_state_dim"],
+                                         dropout=hparams["dprob"],
+                                         batch_first=False))
     elif hparams["prot"]["model_type"].lower() == "p2v":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, hparams["prot"]["protein_embeddings"])
-        model = Prot2Vec(protein_profile=hparams["prot"]["protein_profile"], embeddings=pt_embeddings)
+        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = Prot2Vec(protein_profile=protein_profile, embeddings=pt_embeddings, batch_first=True)
     else:
         model = nn.Sequential(Unsqueeze(dim=0))
     return model
@@ -142,7 +148,7 @@ def create_gconv_net(hparams):
 
 def create_gnn_net(hparams):
     dim = hparams["gnn"]["dim"]
-    gnn_model = GraphNeuralNet2D(num_fingerprints=len(hparams["gnn"]["fingerprint"]), embedding_dim=dim,
+    gnn_model = GraphNeuralNet2D(num_fingerprints=len(hparams["gnn"]["gnn_fingerprint"]), embedding_dim=dim,
                                  num_layers=hparams["gnn"]["num_layers"])
     return nn.Sequential(gnn_model, nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(hparams["dprob"]))
 
@@ -641,6 +647,10 @@ def main(flags):
 
         trainer = IntegratedViewDTI()
 
+        # Fingerprint dict for GNN if available
+        if flags.fingerprint is not None:
+            flags["gnn_fingerprint"] = load_pickle(file_name=flags.fingerprint)
+
         if flags["cv"]:
             k = flags["fold_num"]
             print("{}, {}-Prot: Training scheme: {}-fold cross-validation".format(tasks, sim_label, k))
@@ -845,6 +855,11 @@ def default_hparams_bopt(flags):
         },
         "ecfp8": {
             "dim": 1024,
+        },
+        "gnn": {
+            "fingerprint_size": len(flags["gnn_fingerprint"]),
+            "num_layers": 3,
+            "dim": 100,
         }
     }
 
@@ -1028,6 +1043,11 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument("--gnn_fingerprint",
+                        default=None,
+                        type=str,
+                        help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
+                             "neighbors")
 
     args = parser.parse_args()
     flags = Flags()

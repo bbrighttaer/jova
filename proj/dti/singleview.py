@@ -31,10 +31,10 @@ from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalP
 from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, ConcatLayer
-from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential
+from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential, GraphNeuralNet
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
-from ivpgan.utils.io import load_model, save_model
+from ivpgan.utils.io import load_model, save_model, load_pickle
 from ivpgan.utils.math import ExpAverage
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.train_helpers import count_parameters
@@ -46,7 +46,7 @@ seeds = [123, 124, 125]
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 
 def create_ecfp_net(hparams):
@@ -103,6 +103,11 @@ def create_weave_net(hparams):
 
     # FCN
     civ_dim = hparams["prot_dim"] + hparams["graph_dim"]
+    model = create_feedforwardnet(civ_dim, hparams, weave_model)
+    return model
+
+
+def create_feedforwardnet(civ_dim, hparams, compound_model):
     fcn_args = []
     p = civ_dim
     fcn_layers = hparams["hdims"]
@@ -118,8 +123,7 @@ def create_weave_net(hparams):
         p = dim
     fcn_args.append(FcnArgs(in_features=p, out_features=hparams["output_dim"]))
     fcn_layers = create_fcn_layers(fcn_args)
-
-    model = nn.Sequential(PairSequential(mod1=(weave_model,),
+    model = nn.Sequential(PairSequential(mod1=(compound_model,),
                                          mod2=(nn.Identity(),)),
                           *fcn_layers)
     return model
@@ -143,26 +147,17 @@ def create_gconv_net(hparams):
                                       GraphGather())
     # FCN
     civ_dim = hparams["prot_dim"] + hparams["graph_dim"] * 2
-    fcn_args = []
-    p = civ_dim
-    fcn_layers = hparams["hdims"]
-    if not isinstance(fcn_layers, list):
-        fcn_layers = [fcn_layers]
-    for dim in fcn_layers:
-        conf = FcnArgs(in_features=p,
-                       out_features=dim,
-                       activation='relu',
-                       batch_norm=True,
-                       dropout=hparams["dprob"])
-        fcn_args.append(conf)
-        p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=hparams["output_dim"]))
-    fcn_layers = create_fcn_layers(fcn_args)
+    model = create_feedforwardnet(civ_dim, hparams, gconv_model)
 
-    model = nn.Sequential(PairSequential(mod1=(gconv_model,),
-                                         mod2=(nn.Identity(),)),
-                          *fcn_layers)
+    return model
 
+
+def create_gnn_net(hparams):
+    dim = hparams["gnn"]["dim"]
+    gnn_model = GraphNeuralNet(num_fingerprints=hparams["gnn"]["fingerprint_size"], embedding_dim=dim,
+                               num_layers=hparams["gnn"]["num_layers"])
+    civ_dim = hparams["prot_dim"] + dim
+    model = create_feedforwardnet(civ_dim, hparams, gnn_model)
     return model
 
 
@@ -175,7 +170,8 @@ class SingleViewDTI(Trainer):
         create_func = {"ecfp4": create_ecfp_net,
                        "ecfp8": create_ecfp_net,
                        "weave": create_weave_net,
-                       "gconv": create_gconv_net}.get(hparams["view"])
+                       "gconv": create_gconv_net,
+                       "gnn": create_gnn_net}.get(hparams["view"])
         model = create_func(hparams)
         print("Number of trainable parameters = {}".format(count_parameters(model)))
         if cuda:
@@ -392,7 +388,7 @@ class SingleViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except RuntimeError as e:
+        except ValueError as e:
             print(str(e))
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
@@ -524,9 +520,14 @@ def main(flags):
             data_key = {"ecfp4": "ECFP4",
                         "ecfp8": "ECFP8",
                         "weave": "Weave",
-                        "gconv": "GraphConv"}.get(view)
+                        "gconv": "GraphConv",
+                        "gnn": "GNN"}.get(view)
             data_dict[view] = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict[view] = data_dict[view][2]
+
+            # Fingerprint dict for GNN if available
+            if flags["gnn_fingerprint"] is not None:
+                flags["gnn_fingerprint"] = load_pickle(file_name=flags["gnn_fingerprint"])
 
             tasks = data_dict[view][0]
             # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
@@ -673,6 +674,7 @@ def default_hparams_bopt(flags, view):
         "comp_dim": 1024,
         "hdims": [653, 3635],
         "output_dim": len(flags["tasks"]),
+        "graph_dim": 160,
 
         # weight initialization
         "kaiming_constant": 5,
@@ -680,15 +682,21 @@ def default_hparams_bopt(flags, view):
         # dropout regs
         "dprob": 0.096421,
 
-        "tr_batch_size": 256,
-        "val_batch_size": 512,
-        "test_batch_size": 512,
+        "tr_batch_size": 128,
+        "val_batch_size": 128,
+        "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "adadelta",
         "optimizer__global__weight_decay": 0.004665,
         "optimizer__global__lr": 0.04158,
         "optimizer__adadelta__rho": 0.115873,
+
+        "gnn": {
+            "fingerprint_size": len(flags["gnn_fingerprint"]) if flags["gnn_fingerprint"] is not None else 0,
+            "num_layers": 1,
+            "dim": 160,
+        }
     }
 
 
@@ -845,6 +853,11 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument("--gnn_fingerprint",
+                        default=None,
+                        type=str,
+                        help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
+                             "neighbors")
 
     args = parser.parse_args()
 
@@ -871,5 +884,6 @@ if __name__ == '__main__':
     FLAGS["views"] = args.view
     FLAGS["eval"] = args.eval
     FLAGS["eval_model_name"] = args.eval_model_name
+    FLAGS["gnn_fingerprint"] = args.gnn_fingerprint
 
     main(flags=FLAGS)

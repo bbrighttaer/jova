@@ -772,7 +772,7 @@ def default_hparams_bopt(flags):
             "model_type": prot_model,
             "dim": flags["embeddings_dim"],
             "vocab_size": flags["prot_vocab_size"],
-            "window": 11,
+            "window": 32,
             "rnn_hidden_state_dim": 100
         },
         "weave": {

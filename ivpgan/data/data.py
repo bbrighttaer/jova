@@ -26,6 +26,9 @@ from ivpgan.molnet.load_function.nci60_dataset import load_nci60
 from ivpgan.molnet.load_function.tc_dataset import load_toxcast
 from ivpgan.molnet.load_function.tc_full_kinase_datasets import load_tc_full_kinases
 from ivpgan.molnet.load_function.tc_kinase_datasets import load_tc_kinases
+from ivpgan.utils.math import block_diag_irregular
+
+from ivpgan import cuda as _cuda
 
 
 def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
@@ -310,18 +313,18 @@ def process_gnn_view_data(X, prot_desc_dict, idx, cuda_prot):
 
     for pair in x_data:
         mol, prot = pair
-        adjacency_matrices.append(mol.adjacency)
+        adjacency_matrices.append(torch.from_numpy(mol.adjacency).float())
         fp_profiles.append(cuda(torch.tensor(mol.fingerprints, dtype=torch.long)))
         prot_names.append(prot.get_name())
         prot_desc.append(prot_desc_dict[prot.get_name()])
 
     # compound
-    adjacency_matrices = pad(adjacency_matrices)
+    adjacency_matrices = block_diag_irregular(adjacency_matrices)
     axis = [len(f) for f in fp_profiles]
     M = np.concatenate([np.repeat(len(f), len(f)) for f in fp_profiles])
     M = torch.unsqueeze(torch.FloatTensor(M), 1)
     fingerprints = torch.cat(fp_profiles)
-    mol_data = (fingerprints, adjacency_matrices, cuda(M), axis)
+    mol_data = (fingerprints, cuda(adjacency_matrices), cuda(M), axis)
 
     # protein - PSC
     prot_desc = np.array(prot_desc)
@@ -330,22 +333,21 @@ def process_gnn_view_data(X, prot_desc_dict, idx, cuda_prot):
     return mol_data, prots_tensor.float(), prot_names
 
 
-def pad(matrices, pad_value=0):
-    """Pad adjacency matrices for batch processing."""
-    sizes = [m.shape[0] for m in matrices]
-    M = sum(sizes)
-    pad_matrices = pad_value + np.zeros((M, M))
-    i = 0
-    for j, m in enumerate(matrices):
-        j = sizes[j]
-        pad_matrices[i:i + j, i:i + j] = m
-        i += j
-    return cuda(torch.FloatTensor(pad_matrices))
+# def pad(matrices, pad_value=0):
+#     """Pad adjacency matrices for batch processing."""
+#     sizes = [m.shape[0] for m in matrices]
+#     M = sum(sizes)
+#     pad_matrices = pad_value + np.zeros((M, M))
+#     i = 0
+#     for j, m in enumerate(matrices):
+#         j = sizes[j]
+#         pad_matrices[i:i + j, i:i + j] = m
+#         i += j
+#     return cuda(torch.FloatTensor(pad_matrices))
 
 
 def cuda(tensor):
-    from ivpgan import cuda
-    if cuda:
+    if _cuda:
         return tensor.cuda()
     else:
         return tensor

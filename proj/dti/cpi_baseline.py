@@ -46,7 +46,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 seeds = [123, 124, 125]
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 
 def create_ecfp_net(hparams):
@@ -127,7 +127,7 @@ def create_gnn_net(hparams):
                          nn.BatchNorm1d(hparams["prot"]["dim"]), nn.ReLU(), nn.Dropout(hparams["dprob"]))
 
 
-class SingleViewDTI(Trainer):
+class CPIBaseline(Trainer):
 
     @staticmethod
     def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, protein_embeddings,
@@ -146,8 +146,8 @@ class SingleViewDTI(Trainer):
                                                 np_embeddings=protein_embeddings)
         prot_model = ProtCNN(protein_profile=protein_profile,
                              embeddings=pt_embeddings,
-                             window=hparams["cpi_baseline"]["window"],
-                             num_layers=hparams["cpi_baseline"]["num_layers"])
+                             window=hparams["prot"]["window"],
+                             num_layers=hparams["prot"]["prot_cnn_num_layers"])
         comp_net_pcnn = ProtCnnForward(prot_cnn_model=prot_model, comp_model=comp_model)
 
         p = 2 * hparams["prot"]["dim"]
@@ -381,7 +381,7 @@ class SingleViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except RuntimeError as e:
+        except ValueError as e:
             print(str(e))
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
@@ -529,7 +529,7 @@ def main(flags):
 
             tasks = data_dict[view][0]
 
-            trainer = SingleViewDTI()
+            trainer = CPIBaseline()
 
             if flags["cv"]:
                 k = flags["fold_num"]
@@ -681,9 +681,9 @@ def default_hparams_bopt(flags, view):
         # dropout regs
         "dprob": 0.096421,
 
-        "tr_batch_size": 256,
-        "val_batch_size": 512,
-        "test_batch_size": 512,
+        "tr_batch_size": 128,
+        "val_batch_size": 128,
+        "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "adadelta",
@@ -696,7 +696,9 @@ def default_hparams_bopt(flags, view):
             "in_dim": 8421,
             "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
             "vocab_size": flags["prot_vocab_size"],
-            "rnn_hidden_dim": 128
+            "rnn_hidden_dim": 128,
+            "window": 32,
+            "prot_cnn_num_layers": 3
         },
         "weave": {
             "dim": 50,
@@ -708,10 +710,6 @@ def default_hparams_bopt(flags, view):
         "ecfp8": {
             "in_dim": 1024,
             "ecfp_hdims": [653, 3635],
-        },
-        "cpi_baseline": {
-            "window": 11,
-            "num_layers": 3
         },
         "gnn": {
             "fingerprint_size": len(flags["gnn_fingerprint"]),
@@ -891,7 +889,7 @@ if __name__ == '__main__':
     parser.add_argument("--fingerprint",
                         default=None,
                         type=str,
-                        help="The pickled python dictionary containing the fingerprint profiles of atoms and their"
+                        help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
                              "neighbors")
 
     args = parser.parse_args()

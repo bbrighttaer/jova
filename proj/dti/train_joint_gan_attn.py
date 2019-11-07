@@ -61,6 +61,7 @@ use_ecfp8 = True
 use_weave = False
 use_gconv = True
 use_prot = True
+use_gnn = True
 
 
 def create_ecfp_net(hparams):
@@ -706,10 +707,17 @@ def main(flags):
         if use_gconv:
             data_dict["gconv"] = get_data("GraphConv", flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict["gconv"] = data_dict["gconv"][2]
+        if use_gnn:
+            data_dict["gnn"] = get_data("GNN", flags, prot_sequences=prot_seq_dict, seed=seed)
+            transformers_dict["gnn"] = data_dict["gnn"][2]
 
         tasks = data_dict[list(data_dict.keys())[0]][0]
         # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
         flags["tasks"] = tasks
+
+        # Fingerprint dict for GNN if available
+        if flags.fingerprint is not None:
+            flags["gnn_fingerprint"] = load_pickle(file_name=flags.fingerprint)
 
         trainer = IntegratedViewDTI()
 
@@ -917,6 +925,11 @@ def default_hparams_bopt(flags):
         },
         "ecfp8": {
             "dim": 1024,
+        },
+        "gnn": {
+            "fingerprint_size": len(flags["gnn_fingerprint"]),
+            "num_layers": 3,
+            "dim": 100,
         }
     }
 
@@ -1105,7 +1118,7 @@ if __name__ == '__main__':
     parser.add_argument("--fingerprint",
                         default=None,
                         type=str,
-                        help="The pickled python dictionary containing the fingerprint profiles of atoms and their"
+                        help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
                              "neighbors")
 
     args = parser.parse_args()
