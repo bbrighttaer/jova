@@ -678,26 +678,34 @@ class ProteinRNN(nn.Module):
 
 class Prot2Vec(nn.Module):
 
-    def __init__(self, protein_profile, embeddings, activation='relu', batch_first=False):
+    def __init__(self, protein_profile, vocab_size, embedding_dim, activation='relu', batch_first=False):
+        """
+
+        :param protein_profile:
+        :param vocab_size: int
+            The number of ngrams formed (excluding padding index). An additional row is added to the end of the
+            embedding table constructed as a padding index.
+        :param embedding_dim:
+        :param activation:
+        :param batch_first:
+        """
         super(Prot2Vec, self).__init__()
         self._batch_first = batch_first
         self.protein_profile = protein_profile
-        # shape = embeddings.weight.shape
-        # self.embeddings = nn.Embedding(shape[0], shape[1])
-        self.embeddings = embeddings
+        self.embedding = nn.Embedding(vocab_size + 1, embedding_dim, padding_idx=vocab_size)
         self.activation = get_activation_func(activation)
 
     def forward(self, input):
         # get the embedding indices for this batch
-        x = _construct_embedding_indices(input, self.protein_profile, self.embeddings.weight.device,
-                                         self.embeddings.weight.shape[0] - 1)
-        # get protein embeddings
-        embeddings = self.embeddings(x)
-        embeddings = embeddings.reshape(*embeddings.shape[:2], -1)
-        embeddings = self.activation(embeddings)
+        x = _construct_embedding_indices(input, self.protein_profile, self.embedding.weight.device,
+                                         self.embedding.weight.shape[0] - 1)
+        # get protein embedding
+        embedding = self.embedding(x)
+        embedding = embedding.reshape(*embedding.shape[:2], -1)
+        embedding = self.activation(embedding)
         if not self._batch_first:
-            embeddings = embeddings.permute(1, 0, 2)
-        return embeddings
+            embedding = embedding.permute(1, 0, 2)
+        return embedding
 
 
 class ProteinCNN(nn.Module):
@@ -906,8 +914,8 @@ class JointAttention(nn.Module):
         # Gets number of segments in each view
         num_segs = [x.shape[0] for x in inputs]
 
-        # projection of segments into same dimensional space
-        xs = [(self.lin_prjs[i](x.reshape(-1, x.shape[-1]))).reshape(*x.shape[:2], -1) for i, x in enumerate(inputs)]
+        # projection of segments into equal dimension space
+        xs = [self.lin_prjs[i](x) for i, x in enumerate(inputs)]
 
         # join all segments along the 'seq' dimension
         x = torch.cat(xs)

@@ -97,7 +97,7 @@ if __name__ == '__main__':
                              'in the ProtVec embeddings')
     parser.add_argument('--window',
                         type=int,
-                        default=32,
+                        default=11,
                         help='The window for forming protein sub-sequences from the n-grams')
     # parser.add_argument('--dim',
     #                     type=int,
@@ -107,6 +107,7 @@ if __name__ == '__main__':
 
     word_dict = load_binary(args.vocab)
     proteins = {}
+    print("Window: {}".format(args.window))
 
     for file in args.prot_files:
         print("Loading %s" % file)

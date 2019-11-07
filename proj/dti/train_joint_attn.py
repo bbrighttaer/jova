@@ -67,43 +67,49 @@ def create_ecfp_net(hparams):
     return model
 
 
-def create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models_hook=None):
+def create_prot_net(hparams, model_type, protein_profile, protein_embeddings, frozen_models_hook=None):
     # assert protein_profile is not None, "Protein profile has to be supplied"
     # assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
 
-    model_type = hparams["prot"]["model_type"].lower()
+    # model_type = hparams["prot"]["model_type"].lower()
     valid_opts = ["rnn", "psc", "p2v", "pcnn", "pcnn2d"]
     assert (model_type in valid_opts), "Valid protein types: {}".format(str(valid_opts))
     if model_type == "rnn":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
-                                       embeddings=pt_embeddings,
+                                       vocab_size=hparams["prot"]["vocab_size"],
+                                       embedding_dim=hparams["prot"]["embedding_dim"],
                                        batch_first=False),
-                              ProteinRNN(in_dim=hparams["prot"]["rnn"]["in_dim"] * hparams["prot"]["window"],
-                                         hidden_dim=hparams["prot"]["rnn"]["dim"],
+                              ProteinRNN(in_dim=hparams["prot"]["embedding_dim"] * hparams["prot"]["window"],
+                                         hidden_dim=hparams["prot"]["rnn_hidden_state_dim"],
                                          dropout=hparams["dprob"],
                                          batch_first=False))
     elif model_type == "p2v":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
-        model = Prot2Vec(protein_profile=protein_profile, embeddings=pt_embeddings, batch_first=False)
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = Prot2Vec(protein_profile=protein_profile,
+                         vocab_size=hparams["prot"]["vocab_size"],
+                         embedding_dim=hparams["prot"]["embedding_dim"],
+                         batch_first=False)
     elif model_type == "pcnn":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
-                                       embeddings=pt_embeddings,
+                                       vocab_size=hparams["prot"]["vocab_size"],
+                                       embedding_dim=hparams["prot"]["embedding_dim"],
                                        batch_first=False),
-                              ProteinCNN(dim=hparams["prot"]["pcnn"]["dim"],
+                              ProteinCNN(dim=hparams["prot"]["embedding_dim"],
                                          window=hparams["prot"]["window"],
                                          activation="relu",
                                          pooling_dim=0,
-                                         num_layers=hparams["prot"]["pcnn"]["num_layers"]))
+                                         num_layers=hparams["prot"]["pcnn_num_layers"]))
     elif model_type == "pcnn2d":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
-                                       embeddings=pt_embeddings,
+                                       vocab_size=hparams["prot"]["vocab_size"],
+                                       embedding_dim=hparams["prot"]["embedding_dim"],
                                        batch_first=False),
-                              ProteinCNN2D(dim=hparams["prot"]["pcnn2d"]["dim"],
+                              ProteinCNN2D(dim=hparams["prot"]["embedding_dim"],
                                            window=hparams["prot"]["window"],
-                                           num_layers=hparams["prot"]["pcnn2d"]["num_layers"]))
+                                           num_layers=hparams["prot"]["pcnn_num_layers"]))
     elif model_type == "psc":
         model = nn.Sequential(Unsqueeze(dim=0))
     return model
@@ -182,6 +188,7 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
     views = {}
     seg_dims = []
 
+    # compound models
     if use_ecfp8:
         views["ecfp8"] = create_ecfp_net(hparams)
         seg_dims.append(hparams["ecfp8"]["dim"])
@@ -194,12 +201,20 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
     if use_gnn:
         views["gnn"] = create_gnn_net(hparams)
         seg_dims.append(hparams["gnn"]["dim"])
-    if use_prot:
-        views["prot"] = create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models)
+
+    # protein models
+    for m_type in hparams["prot"]["model_types"]:
+        views[m_type] = create_prot_net(hparams, m_type, protein_profile, protein_embeddings, frozen_models)
+        if m_type == "psc":
+            seg_dims.append(hparams["prot"]["psc_dim"])
+        elif m_type == "rnn":
+            seg_dims.append(hparams["prot"]["rnn_hidden_state_dim"])
+        elif m_type == "p2v":
+            seg_dims.append(hparams["prot"]["embedding_dim"] * hparams["prot"]["window"])
+        elif m_type in ["pcnn", "pcnn2d"]:
+            seg_dims.append(hparams["prot"]["embedding_dim"])
 
     layers = [NwayForward(models=views.values())]
-
-    seg_dims.append(hparams["prot"][hparams["prot"]["model_type"]]["dim"])
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
@@ -277,7 +292,7 @@ class IntegratedViewDTI(Trainer):
                    mt.Metric(mt.concordance_index, np.nanmean),
                    mt.Metric(mt.pearson_r2_score, np.nanmean)]
         return model, optimizer, {"train": train_data_loader, "val": val_data_loader,
-                                  "test": test_data_loader}, metrics, hparams["prot"]["model_type"], frozen_models
+                                  "test": test_data_loader}, metrics, hparams["prot"]["model_types"], frozen_models
 
     @staticmethod
     def data_provider(fold, flags, data_dict):
@@ -317,7 +332,7 @@ class IntegratedViewDTI(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, model, optimizer, data_loaders, metrics, prot_model_type, frozen_models, transformers_dict,
+    def train(eval_fn, model, optimizer, data_loaders, metrics, prot_model_types, frozen_models, transformers_dict,
               prot_desc_dict, tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None):
         tb_writer = tb_writer()
         start = time.time()
@@ -385,7 +400,7 @@ class IntegratedViewDTI(Trainer):
                                                                                                "weave": use_weave,
                                                                                                "gconv": use_gconv,
                                                                                                "gnn": use_gnn},
-                                                                  cuda_prot=prot_model_type == "psc")
+                                                                  cuda_prot=True)
                                 # organize the data for each view.
                                 Xs = {}
                                 Ys = {}
@@ -412,10 +427,16 @@ class IntegratedViewDTI(Trainer):
 
                                     y = Ys[list(Xs.keys())[0]]
                                     w = Ws[list(Xs.keys())[0]]
-                                    if prot_model_type in ["p2v", "rnn", "pcnn", "pcnn2d"]:
-                                        protein_x = Xs[list(Xs.keys())[0]][2]
-                                    else:
-                                        protein_x = Xs[list(Xs.keys())[0]][1]
+
+                                    # protein data in batch
+                                    protein_xs = []
+                                    for m_type in prot_model_types:
+                                        if m_type in ["p2v", "rnn", "pcnn", "pcnn2d"]:
+                                            protein_xs.append(Xs[list(Xs.keys())[0]][2])
+                                        elif m_type == "psc":
+                                            protein_xs.append(Xs[list(Xs.keys())[0]][1])
+
+                                    # compound data in batch
                                     X = []
                                     if use_ecfp8:
                                         X.append(Xs["ecfp8"][0])
@@ -423,8 +444,9 @@ class IntegratedViewDTI(Trainer):
                                         X.append(Xs["weave"][0])
                                     if use_gconv:
                                         X.append(Xs["gconv"][0])
-                                    if use_prot:
-                                        X.append(protein_x)
+
+                                    # merge compound and protein list
+                                    X = X + protein_xs
 
                                     outputs = model(X)
                                     target = torch.from_numpy(y).float()
@@ -604,8 +626,8 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    flags["prot_model_type"] = "pcnn2d"
-    sim_label = "integrated_view_attn_no_gan_" + flags["prot_model_type"]
+    flags["prot_model_types"] = ["psc", "p2v"]
+    sim_label = "integrated_view_attn_no_gan_" + ('_'.join(flags["prot_model_types"]))
     print("CUDA={}, view={}".format(cuda, sim_label))
 
     # Simulation data resource tree
@@ -623,11 +645,12 @@ def main(flags):
 
     # Runtime Protein stuff
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
-    prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
-    pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
+    prot_profile = load_pickle(file_name=flags.prot_profile)
+    prot_vocab = load_pickle(file_name=flags.prot_vocab)
+    pretrained_embeddings = None  # load_numpy_array(flags.protein_embeddings)
     flags["prot_vocab_size"] = len(prot_vocab)
-    flags["embeddings_dim"] =  pretrained_embeddings.shape[-1]
-    flags["window"] = 32  # window for grouping n-grams of amino acid
+    # flags["embeddings_dim"] =  pretrained_embeddings.shape[-1]
+    # flags["window"] = 11  # window for grouping n-grams of amino acid
 
     # For searching over multiple seeds
     hparam_search = None
@@ -874,31 +897,13 @@ def default_hparams_bopt(flags):
         "optimizer__global__weight_decay": 0.0009,
         "optimizer__global__lr": 0.0006,
         "prot": {
-            "model_type": flags["prot_model_type"],
+            "model_types": flags["prot_model_types"],
             "vocab_size": flags["prot_vocab_size"],
-            "window": flags["window"],
-            "prot_cnn_num_layers": 2,
-
-            # protein model type configs
-            "psc": {
-                "dim": 8421,
-                "in_dim": 8421,
-            },
-            "p2v": {
-                "dim": flags["embeddings_dim"] * flags["window"]
-            },
-            "rnn": {
-                "in_dim": flags["embeddings_dim"],
-                "dim": 128,
-            },
-            "pcnn": {
-                "dim": flags["embeddings_dim"],
-                "num_layers": 2
-            },
-            "pcnn2d": {
-                "dim": flags["embeddings_dim"],
-                "num_layers": 2
-            }
+            "window": 11,
+            "pcnn_num_layers": 2,
+            "embedding_dim": 10,
+            "psc_dim": 8421,
+            "rnn_hidden_state_dim": 10
         },
         "weave": {
             "dim": 50,
