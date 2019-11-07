@@ -40,13 +40,14 @@ from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.io import load_pickle, load_numpy_array
 from ivpgan.utils.math import ExpAverage
 from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters, create_torch_embeddings, FrozenModels
+from ivpgan.utils.train_helpers import count_parameters, FrozenModels
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [123, 124, 125]
+seeds = [1, 8, 64]
 
+# seeds = [123, 124, 125]
 check_data = False
 
 torch.cuda.set_device(0)
@@ -55,25 +56,6 @@ use_weave = False
 use_gconv = True
 use_gnn = False
 use_prot = True
-
-
-def create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models_hook=None):
-    assert protein_profile is not None, "Protein profile has to be supplied"
-    assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
-
-    if hparams["prot"]["model_type"].lower() == "rnn":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
-        model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
-                                       embeddings=pt_embeddings,
-                                       batch_first=True),
-                              ProteinRNN(in_dim=hparams["prot"]["dim"] * hparams["prot"]["window"],
-                                         hidden_dim=hparams["prot"]["rnn_hidden_state_dim"],
-                                         dropout=hparams["dprob"],
-                                         batch_first=True))
-    else:
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
-        model = Prot2Vec(protein_profile=protein_profile, embeddings=pt_embeddings, batch_first=True)
-    return model
 
 
 def create_weave_net(hparams):
@@ -141,8 +123,14 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
     # N-way forward propagation
     views = {}
     comp_dim = 0
-    if use_prot:
-        views["prot"] = create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models)
+    views["prot"] = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
+                                           vocab_size=hparams["prot"]["vocab_size"],
+                                           embedding_dim=hparams["prot"]["dim"],
+                                           batch_first=True),
+                                  ProteinRNN(in_dim=hparams["prot"]["dim"] * hparams["prot"]["window"],
+                                             hidden_dim=hparams["prot"]["rnn_hidden_state_dim"],
+                                             dropout=hparams["dprob"],
+                                             batch_first=True))
     if use_weave:
         views["weave"] = create_weave_net(hparams)
         comp_dim = hparams["weave"]["dim"]
@@ -161,10 +149,7 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
         p = dim
 
     # Build model. Note: the order of protein and compound models should be consistent.
-    if hparams["prot"]["model_type"] == "p2v":
-        prot_dim = hparams["prot"]["dim"] * hparams["prot"]["window"]
-    else:
-        prot_dim = hparams["prot"]["rnn_hidden_state_dim"]
+    prot_dim = hparams["prot"]["rnn_hidden_state_dim"]
     model = nn.Sequential(TwoWayForward(*views.values()),
                           TwoWayAttention(prot_dim, comp_dim),
                           PreSiameseLinear(prot_dim, comp_dim, hparams["latent_dim"]),
@@ -772,8 +757,8 @@ def default_hparams_bopt(flags):
             "model_type": prot_model,
             "dim": flags["embeddings_dim"],
             "vocab_size": flags["prot_vocab_size"],
-            "window": 32,
-            "rnn_hidden_state_dim": 100
+            "window": 11,
+            "rnn_hidden_state_dim": 10
         },
         "weave": {
             "dim": 50,
@@ -808,10 +793,10 @@ def get_hparam_config(flags):
 
         "prot": DictParam({
             "model_type": ConstantParam(prot_model),
-            "dim": ConstantParam(flags["embeddings_dim"]),
+            "dim": DiscreteParam(min=5, max=50),
             "vocab_size": ConstantParam(flags["prot_vocab_size"]),
             "window": ConstantParam(11),
-            "rnn_hidden_state_dim": DiscreteParam(min=50, max=512)
+            "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
         }),
         "weave": ConstantParam({
             "dim": 50,

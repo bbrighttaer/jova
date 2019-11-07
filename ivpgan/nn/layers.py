@@ -558,6 +558,22 @@ class Unsqueeze(nn.Module):
         return x.unsqueeze(dim=self.dim)
 
 
+class ElementwiseBatchNorm(nn.Module):
+    """
+    Applies normalization to each element in a tensor.
+    It assumes the model dimension is the last element in tensor.shape
+    """
+    def __init__(self, dim):
+        super(ElementwiseBatchNorm, self).__init__()
+        self.batch_norm = nn.BatchNorm1d(dim)
+
+    def forward(self, x):
+        shape = x.shape
+        x = self.batch_norm(x.view(-1, shape[-1]))
+        x = x.view(*shape)
+        return x
+
+
 class PreSiameseLinear(nn.Module):
     """
     Prepares inputs to a siamese net.

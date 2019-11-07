@@ -44,7 +44,10 @@ from ivpgan.utils.train_helpers import count_parameters, create_torch_embeddings
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [123, 124, 125]
+
+seeds = [1, 8, 64]
+
+# seeds = [123, 124, 125]
 
 torch.cuda.set_device(0)
 
@@ -142,16 +145,17 @@ class CPIBaseline(Trainer):
                              "gconv": create_gconv_net,
                              "gnn": create_gnn_net}.get(view_lbl)
         comp_model = create_comp_model(hparams)
-        pt_embeddings = create_torch_embeddings(frozen_models_hook=frozen_models,
-                                                np_embeddings=protein_embeddings)
-        comp_net_pcnn = ProtCnnForward(
-            prot2vec=Prot2Vec(protein_profile=protein_profile,
-                              embeddings=pt_embeddings,
-                              batch_first=True),
-            prot_cnn_model=ProteinCNNAttention(dim=hparams["prot"]["dim"],
-                                               window=hparams["prot"]["window"],
-                                               num_layers=hparams["prot"]["prot_cnn_num_layers"]),
-            comp_model=comp_model)
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook=frozen_models,
+        #                                         np_embeddings=protein_embeddings)
+        comp_net_pcnn = ProtCnnForward(prot2vec=Prot2Vec(protein_profile=protein_profile,
+                                                         vocab_size=hparams["prot"]["vocab_size"],
+                                                         embedding_dim=hparams["prot"]["dim"],
+                                                         batch_first=True),
+                                       prot_cnn_model=ProteinCNNAttention(dim=hparams["prot"]["dim"],
+                                                                          window=hparams["prot"]["window"],
+                                                                          num_layers=hparams["prot"][
+                                                                              "prot_cnn_num_layers"]),
+                                       comp_model=comp_model)
 
         p = 2 * hparams["prot"]["dim"]
         layers = [comp_net_pcnn]
@@ -163,7 +167,7 @@ class CPIBaseline(Trainer):
             p = dim
 
         # Output layer
-        layers.append(nn.Linear(in_features=p, out_features=1))
+        layers.append(nn.Linear(in_features=p, out_features=hparams["output_dim"]))
 
         model = nn.Sequential(*layers)
 
@@ -246,7 +250,6 @@ class CPIBaseline(Trainer):
 
     @staticmethod
     def evaluate(eval_dict, y, y_pred, w, metrics, tasks, transformers):
-        y = y.reshape(-1, 1).astype(np.float)
         eval_dict.update(compute_model_performance(metrics, y_pred.cpu().detach().numpy(), y, w, transformers,
                                                    tasks=tasks))
         # scoring
@@ -316,8 +319,8 @@ class CPIBaseline(Trainer):
                             X = (protein_x, (data[view_lbl][0][0], batch_size))
                         else:
                             X = (protein_x, data[view_lbl][0][0])
-                        y = data[view_lbl][1]
-                        w = data[view_lbl][2].reshape(-1, 1).astype(np.float)
+                        y = np.array([k for k in data[view_lbl][1]], dtype=np.float)
+                        w = np.array([k for k in data[view_lbl][2]], dtype=np.float)
 
                         optimizer.zero_grad()
 
@@ -325,9 +328,12 @@ class CPIBaseline(Trainer):
                         # track history if only in train
                         with torch.set_grad_enabled(phase == "train"):
                             outputs = model(X)
-                            target = torch.from_numpy(y.astype(np.float)).view(-1, 1).float()
+                            target = torch.from_numpy(y).float()
+                            weights = torch.from_numpy(w).float()
                             if cuda:
                                 target = target.cuda()
+                                weights = weights.cuda()
+                            outputs = outputs * weights
                             loss = criterion(outputs, target)
 
                         if phase == "train":
@@ -384,7 +390,7 @@ class CPIBaseline(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except ValueError as e:
+        except RuntimeError as e:
             print(str(e))
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
@@ -494,9 +500,9 @@ def main(flags):
         # Runtime Protein stuff
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
         prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
-        pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
+        pretrained_embeddings = None # load_numpy_array(flags.protein_embeddings)
         flags["prot_vocab_size"] = len(prot_vocab)
-        flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
+        # flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
 
         # For searching over multiple seeds
         hparam_search = None
@@ -531,6 +537,7 @@ def main(flags):
                 flags["gnn_fingerprint"] = load_pickle(file_name=flags.fingerprint)
 
             tasks = data_dict[view][0]
+            flags["tasks"] = tasks
 
             trainer = CPIBaseline()
 
@@ -673,10 +680,10 @@ def default_hparams_rand(flags, view):
 
 
 def default_hparams_bopt(flags, view):
-    prot_model = "p2v"
     return {
         "view": view,
         "hdims": [653, 3635],
+        "output_dim": len(flags.tasks),
 
         # weight initialization
         "kaiming_constant": 5,
@@ -695,13 +702,10 @@ def default_hparams_bopt(flags, view):
         "optimizer__adadelta__rho": 0.115873,
 
         "prot": {
-            "model_type": prot_model,
-            "in_dim": 8421,
-            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
+            "dim": 10,
             "vocab_size": flags["prot_vocab_size"],
-            "rnn_hidden_dim": 128,
-            "window": 32,
-            "prot_cnn_num_layers": 3
+            "window": 11,
+            "prot_cnn_num_layers": 2
         },
         "weave": {
             "dim": 50,
@@ -723,32 +727,31 @@ def default_hparams_bopt(flags, view):
 
 
 def get_hparam_config(flags, view):
-    prot_model = "p2v"
     return {
         "view": ConstantParam(view),
         "hdims": DiscreteParam(min=256, max=5000, size=DiscreteParam(min=1, max=4)),
+        "output_dim": ConstantParam(len(flags.tasks)),
 
         # weight initialization
-        "kaiming_constant": ConstantParam(5),  # DiscreteParam(min=2, max=9),
+        "kaiming_constant": ConstantParam(5),
 
         # dropout regs
         "dprob": RealParam(min=0.1),
 
-        "tr_batch_size": ConstantParam(256),
-        "val_batch_size": ConstantParam(512),
-        "test_batch_size": ConstantParam(512),
+        "tr_batch_size": CategoricalParam([1, 32, 64, 128, 256]),
+        "val_batch_size": ConstantParam(128),
+        "test_batch_size": ConstantParam(128),
 
         # optimizer params
         "optimizer": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer__global__weight_decay": LogRealParam(),
         "optimizer__global__lr": LogRealParam(),
 
-        "prot": ConstantParam({
-            "model_type": prot_model,
-            "in_dim": 8421,
-            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
-            "vocab_size": flags["prot_vocab_size"],
-            "rnn_hidden_dim": 128,
+        "prot": DictParam({
+            "dim": DiscreteParam(min=5, max=50),
+            "vocab_size": ConstantParam(flags["prot_vocab_size"]),
+            "window": ConstantParam(11),
+            "prot_cnn_num_layers": DiscreteParam(min=1, max=4)
         }),
         "weave": ConstantParam({
             "dim": 50,
@@ -760,10 +763,6 @@ def get_hparam_config(flags, view):
         "ecfp8": ConstantParam({
             "in_dim": 1024,
             "ecfp_hdims": [653, 3635],
-        }),
-        "cpi_baseline": DictParam({
-            "window": ConstantParam(11),
-            "num_layers": DiscreteParam(min=1, max=4)
         }),
         "gnn": DictParam({
             "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"])),

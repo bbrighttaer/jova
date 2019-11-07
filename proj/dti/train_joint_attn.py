@@ -33,16 +33,16 @@ import ivpgan.metrics as mt
 from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
 from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
+from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D, ElementwiseBatchNorm
 from ivpgan.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN, \
     GraphNeuralNet2D, ProteinCNN2D, ProteinCNN
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
+from ivpgan.utils.io import load_pickle
 from ivpgan.utils.math import ExpAverage, Count
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.tb import TBMeanTracker
-from ivpgan.utils.train_helpers import count_parameters, GradStats, create_torch_embeddings, FrozenModels
-from ivpgan.utils.io import load_pickle, load_numpy_array
+from ivpgan.utils.train_helpers import count_parameters, GradStats, FrozenModels
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -53,7 +53,7 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 use_ecfp8 = True
 use_weave = False
@@ -175,9 +175,13 @@ def create_gconv_net(hparams):
 
 def create_gnn_net(hparams):
     dim = hparams["gnn"]["dim"]
-    gnn_model = GraphNeuralNet2D(num_fingerprints=len(hparams["gnn"]["gnn_fingerprint"]), embedding_dim=dim,
+    gnn_model = GraphNeuralNet2D(num_fingerprints=hparams["gnn"]["fingerprint_size"], embedding_dim=dim,
                                  num_layers=hparams["gnn"]["num_layers"])
-    return nn.Sequential(gnn_model, nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(hparams["dprob"]))
+    return nn.Sequential(gnn_model,
+                         nn.Linear(dim, dim),
+                         ElementwiseBatchNorm(dim),
+                         nn.ReLU(),
+                         nn.Dropout(hparams["dprob"]))
 
 
 def create_integrated_net(hparams, protein_profile, protein_embeddings):
@@ -444,6 +448,8 @@ class IntegratedViewDTI(Trainer):
                                         X.append(Xs["weave"][0])
                                     if use_gconv:
                                         X.append(Xs["gconv"][0])
+                                    if use_gnn:
+                                        X.append(Xs["gnn"][0])
 
                                     # merge compound and protein list
                                     X = X + protein_xs
@@ -522,7 +528,7 @@ class IntegratedViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except ValueError as e:
+        except RuntimeError as e:
             print(str(e))
 
         duration = time.time() - start
@@ -626,8 +632,18 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    flags["prot_model_types"] = ["psc", "p2v"]
-    sim_label = "integrated_view_attn_no_gan_" + ('_'.join(flags["prot_model_types"]))
+    comp_lbl = []
+    if use_ecfp8:
+        comp_lbl.append("ecfp8")
+    if use_weave:
+        comp_lbl.append("weave")
+    if use_gconv:
+        comp_lbl.append("gconv")
+    if use_gnn:
+        comp_lbl.append("gnn")
+    comp_lbl = '_'.join(comp_lbl)
+    flags["prot_model_types"] = ["pcnn2d"]
+    sim_label = "integrated_view_attn_no_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
     print("CUDA={}, view={}".format(cuda, sim_label))
 
     # Simulation data resource tree
@@ -656,7 +672,7 @@ def main(flags):
     hparam_search = None
 
     for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_sim_runs/{}_{}_{}/".format(sim_label, seed,
+        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
                                                                                               dt.now().strftime(
                                                                                                   "%Y_%m_%d__%H_%M_%S")))
 
@@ -888,7 +904,7 @@ def default_hparams_bopt(flags):
         # dropout
         "dprob": 0.1,
 
-        "tr_batch_size": 256,
+        "tr_batch_size": 128,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
@@ -925,10 +941,10 @@ def default_hparams_bopt(flags):
 
 def get_hparam_config(flags):
     return {
-        "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
         "attn_layers": DiscreteParam(min=1, max=3),
         "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
+        "output_dim": ConstantParam(len(flags.tasks)),
         "latent_dim": CategoricalParam(choices=[256, 512]),
 
         # weight initialization
@@ -947,9 +963,13 @@ def get_hparam_config(flags):
         "optimizer__global__lr": LogRealParam(),
 
         "prot": DictParam({
-            "model_type": ConstantParam("psc"),
-            "in_dim": ConstantParam(8421),
-            "dim": ConstantParam(8421),
+            "model_types": ConstantParam(flags["prot_model_types"]),
+            "vocab_size": ConstantParam(flags["prot_vocab_size"]),
+            "window": ConstantParam(11),
+            "pcnn_num_layers": DiscreteParam(min=1, max=4),
+            "embedding_dim": DiscreteParam(min=5, max=50),
+            "psc_dim": ConstantParam(8421),
+            "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
         }),
         "weave": DictParam({
             # "dim": DiscreteParam(min=64, max=512),
@@ -960,6 +980,11 @@ def get_hparam_config(flags):
         }),
         "ecfp8": DictParam({
             "dim": ConstantParam(1024),
+        }),
+        "gnn": DictParam({
+            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"])),
+            "num_layers": DiscreteParam(1, 4),
+            "dim": DiscreteParam(min=64, max=512),
         })
     }
 
@@ -969,10 +994,12 @@ def verify_multiview_data(data_dict, cv_data=True):
         ecfp8_data = data_dict["ecfp8"][1][0][0]
         weave_data = data_dict["weave"][1][0][0]
         gconv_data = data_dict["gconv"][1][0][0]
+        gnn_data = data_dict["gnn"][1][0][0]
     else:
         ecfp8_data = data_dict["ecfp8"][1][0]
         weave_data = data_dict["weave"][1][0]
         gconv_data = data_dict["gconv"][1][0]
+        gnn_data = data_dict["gnn"][1][0]
     corr = []
     for i in range(100):
         print("-" * 100)
@@ -985,8 +1012,11 @@ def verify_multiview_data(data_dict, cv_data=True):
         gconv = "mol={}, prot={}, y={}".format(gconv_data.X[i][0].smiles, gconv_data.X[i][1].get_name(),
                                                gconv_data.y[i])
         print("gconv:", gconv)
+        gnn = "mol={}, prot={}, y={}".format(gnn_data.X[i][0].smiles, gnn_data.X[i][1].get_name(),
+                                             gnn_data.y[i])
+        print("gnn:", gnn)
         print('#' * 100)
-        corr.append(ecfp8 == weave == gconv)
+        corr.append(ecfp8 == weave == gconv == gnn)
     print(corr)
 
 

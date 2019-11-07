@@ -27,7 +27,7 @@ import ivpgan.metrics as mt
 from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
 from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
+from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam
 from soek.rand import RandomSearchCV
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, ConcatLayer
@@ -173,7 +173,7 @@ class SingleViewDTI(Trainer):
                        "weave": create_weave_net,
                        "gconv": create_gconv_net,
                        "gnn": create_gnn_net}.get(hparams["view"])
-        model = create_func(hparams, protein_profile, protein_embeddings)
+        model = create_func(hparams)
         print("Number of trainable parameters = {}".format(count_parameters(model)))
         if cuda:
             model = model.cuda()
@@ -389,7 +389,7 @@ class SingleViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except ValueError as e:
+        except RuntimeError as e:
             print(str(e))
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
@@ -729,6 +729,7 @@ def get_hparam_config(flags, view):
         "comp_dim": ConstantParam(1024),
         "hdims": DiscreteParam(min=256, max=5000, size=DiscreteParam(min=1, max=4)),
         "graph_dim": DiscreteParam(min=64, max=512),
+        "output_dim": ConstantParam(len(flags["tasks"])),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),  # DiscreteParam(min=2, max=9),
@@ -744,6 +745,12 @@ def get_hparam_config(flags, view):
         "optimizer": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer__global__weight_decay": LogRealParam(),
         "optimizer__global__lr": LogRealParam(),
+
+        "gnn": DictParam({
+            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"])),
+            "num_layers": DiscreteParam(1, 4),
+            "dim": DiscreteParam(min=64, max=512),
+        }),
 
         # SGD
         "optimizer__sgd__nesterov": CategoricalParam(choices=[True, False]),

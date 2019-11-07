@@ -398,6 +398,12 @@ class GraphNeuralNet(nn.Module):
 class GraphNeuralNet2D(GraphNeuralNet):
 
     def forward(self, inputs):
+        """
+
+        :param inputs:
+        :return: 3D tensor
+            Structure: [number of segments, batch size, dimension]
+        """
         fingerprints, adjacency_matrices, M, axis = inputs
 
         fingerprints = self.embed_fingerprint(fingerprints)
@@ -660,7 +666,7 @@ class ProteinRNN(nn.Module):
         self.batch_first = batch_first
         if num_layers == 1:
             dropout = 0
-        self.model = nn.LSTM(input_size=in_dim, hidden_size=self.hidden_dim, num_layers=self.num_layers,
+        self.model = nn.LSTM(input_size=int(in_dim), hidden_size=int(self.hidden_dim), num_layers=int(self.num_layers),
                              batch_first=batch_first, dropout=dropout, bidirectional=bidrectional)
 
     def forward(self, x):
@@ -692,7 +698,7 @@ class Prot2Vec(nn.Module):
         super(Prot2Vec, self).__init__()
         self._batch_first = batch_first
         self.protein_profile = protein_profile
-        self.embedding = nn.Embedding(vocab_size + 1, embedding_dim, padding_idx=vocab_size)
+        self.embedding = nn.Embedding(vocab_size + 1, int(embedding_dim), padding_idx=vocab_size)
         self.activation = get_activation_func(activation)
 
     def forward(self, input):
@@ -772,7 +778,7 @@ class ProteinCNNAttention(ProteinCNN):
     """
 
     def __init__(self, dim, activation='relu', window=11, num_layers=3):
-        super(ProteinCNNAttention, self).__init__(dim, activation, window, num_layers)
+        super(ProteinCNNAttention, self).__init__(dim, window, activation, num_layers)
         self.W_attention = nn.Linear(dim, dim)
 
     def forward(self, prot_x, comp_x):
