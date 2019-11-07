@@ -49,7 +49,7 @@ seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 use_weave = False
 use_gconv = True

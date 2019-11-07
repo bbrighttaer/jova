@@ -312,7 +312,8 @@ def create_torch_embeddings(frozen_models_hook, np_embeddings):
     # Add zeros as the last row for entries added to embeddings query just to pad them for batch processing.
     padded_embeddings = F.pad(pretrained_embeddings, (0, 0, 0, 1))
     shape = padded_embeddings.shape
-    pt_embeddings = torch.nn.Embedding(num_embeddings=shape[0], embedding_dim=shape[1], _weight=padded_embeddings)
+    pt_embeddings = torch.nn.Embedding(num_embeddings=shape[0], embedding_dim=shape[1],
+                                       _weight=padded_embeddings, padding_idx=shape[0]-1)
     if frozen_models_hook:
         frozen_models_hook.add_model(pt_embeddings)
     return pt_embeddings
