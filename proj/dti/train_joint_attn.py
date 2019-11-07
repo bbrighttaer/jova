@@ -35,7 +35,7 @@ from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
 from ivpgan.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN, \
-    GraphNeuralNet2D
+    GraphNeuralNet2D, ProteinCNN2D, ProteinCNN
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.math import ExpAverage, Count
@@ -56,10 +56,10 @@ check_data = False
 torch.cuda.set_device(0)
 
 use_ecfp8 = True
-use_weave = True
+use_weave = False
 use_gconv = True
 use_prot = True
-use_gnn = True
+use_gnn = False
 
 
 def create_ecfp_net(hparams):
@@ -68,22 +68,43 @@ def create_ecfp_net(hparams):
 
 
 def create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models_hook=None):
-    assert protein_profile is not None, "Protein profile has to be supplied"
-    assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
+    # assert protein_profile is not None, "Protein profile has to be supplied"
+    # assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
 
-    if hparams["prot"]["model_type"].lower() == "rnn":
+    model_type = hparams["prot"]["model_type"].lower()
+    valid_opts = ["rnn", "psc", "p2v", "pcnn", "pcnn2d"]
+    assert (model_type in valid_opts), "Valid protein types: {}".format(str(valid_opts))
+    if model_type == "rnn":
         pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
                                        embeddings=pt_embeddings,
                                        batch_first=False),
-                              ProteinRNN(in_dim=hparams["prot"]["dim"] * hparams["prot"]["window"],
-                                         hidden_dim=hparams["prot"]["rnn_hidden_state_dim"],
+                              ProteinRNN(in_dim=hparams["prot"]["rnn"]["in_dim"] * hparams["prot"]["window"],
+                                         hidden_dim=hparams["prot"]["rnn"]["dim"],
                                          dropout=hparams["dprob"],
                                          batch_first=False))
-    elif hparams["prot"]["model_type"].lower() == "p2v":
+    elif model_type == "p2v":
         pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
-        model = Prot2Vec(protein_profile=protein_profile, embeddings=pt_embeddings, batch_first=True)
-    else:
+        model = Prot2Vec(protein_profile=protein_profile, embeddings=pt_embeddings, batch_first=False)
+    elif model_type == "pcnn":
+        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
+                                       embeddings=pt_embeddings,
+                                       batch_first=False),
+                              ProteinCNN(dim=hparams["prot"]["pcnn"]["dim"],
+                                         window=hparams["prot"]["window"],
+                                         activation="relu",
+                                         pooling_dim=0,
+                                         num_layers=hparams["prot"]["pcnn"]["num_layers"]))
+    elif model_type == "pcnn2d":
+        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
+                                       embeddings=pt_embeddings,
+                                       batch_first=False),
+                              ProteinCNN2D(dim=hparams["prot"]["pcnn2d"]["dim"],
+                                           window=hparams["prot"]["window"],
+                                           num_layers=hparams["prot"]["pcnn2d"]["num_layers"]))
+    elif model_type == "psc":
         model = nn.Sequential(Unsqueeze(dim=0))
     return model
 
@@ -153,27 +174,32 @@ def create_gnn_net(hparams):
     return nn.Sequential(gnn_model, nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(hparams["dprob"]))
 
 
-def create_integrated_net(hparams):
+def create_integrated_net(hparams, protein_profile, protein_embeddings):
     # Convenient way of keeping track of models to be frozen during (or at the initial stages) training.
     frozen_models = FrozenModels()
 
     # N-way forward propagation
     views = {}
+    seg_dims = []
 
     if use_ecfp8:
         views["ecfp8"] = create_ecfp_net(hparams)
+        seg_dims.append(hparams["ecfp8"]["dim"])
     if use_weave:
         views["weave"] = create_weave_net(hparams)
+        seg_dims.append(hparams["weave"]["dim"])
     if use_gconv:
         views["gconv"] = create_gconv_net(hparams)
+        seg_dims.append(hparams["gconv"]["dim"])
     if use_gnn:
         views["gnn"] = create_gnn_net(hparams)
+        seg_dims.append(hparams["gnn"]["dim"])
     if use_prot:
-        views["prot"] = create_prot_net(hparams, frozen_models)
+        views["prot"] = create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models)
 
     layers = [NwayForward(models=views.values())]
 
-    seg_dims = [hparams[c]["dim"] for c in views.keys()]
+    seg_dims.append(hparams["prot"][hparams["prot"]["model_type"]]["dim"])
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
@@ -198,10 +224,11 @@ def create_integrated_net(hparams):
 class IntegratedViewDTI(Trainer):
 
     @staticmethod
-    def initialize(hparams, train_dataset, val_dataset, test_dataset, cuda_devices=None, mode="regression"):
+    def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, protein_embeddings,
+                   cuda_devices=None, mode="regression"):
 
         # create networks
-        model, frozen_models = create_integrated_net(hparams)
+        model, frozen_models = create_integrated_net(hparams, protein_profile, protein_embeddings)
         print("Number of trainable parameters: model={}".format(count_parameters(model)))
         if cuda:
             model = model.cuda()
@@ -385,7 +412,7 @@ class IntegratedViewDTI(Trainer):
 
                                     y = Ys[list(Xs.keys())[0]]
                                     w = Ws[list(Xs.keys())[0]]
-                                    if prot_model_type == "p2v" or prot_model_type == "rnn":
+                                    if prot_model_type in ["p2v", "rnn", "pcnn", "pcnn2d"]:
                                         protein_x = Xs[list(Xs.keys())[0]][2]
                                     else:
                                         protein_x = Xs[list(Xs.keys())[0]][1]
@@ -473,7 +500,7 @@ class IntegratedViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except RuntimeError as e:
+        except ValueError as e:
             print(str(e))
 
         duration = time.time() - start
@@ -577,7 +604,8 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    sim_label = "integrated_view_attn_no_gan"
+    flags["prot_model_type"] = "pcnn2d"
+    sim_label = "integrated_view_attn_no_gan_" + flags["prot_model_type"]
     print("CUDA={}, view={}".format(cuda, sim_label))
 
     # Simulation data resource tree
@@ -598,9 +626,8 @@ def main(flags):
     prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
     pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
     flags["prot_vocab_size"] = len(prot_vocab)
-    flags["protein_profile"] = prot_profile
-    flags["protein_embeddings"] = pretrained_embeddings
-    flags["embeddings_dim"] = 100
+    flags["embeddings_dim"] =  pretrained_embeddings.shape[-1]
+    flags["window"] = 32  # window for grouping n-grams of amino acid
 
     # For searching over multiple seeds
     hparam_search = None
@@ -648,8 +675,8 @@ def main(flags):
         trainer = IntegratedViewDTI()
 
         # Fingerprint dict for GNN if available
-        if flags.fingerprint is not None:
-            flags["gnn_fingerprint"] = load_pickle(file_name=flags.fingerprint)
+        if flags.gnn_fingerprint is not None:
+            flags["gnn_fingerprint"] = load_pickle(file_name=flags.gnn_fingerprint)
 
         if flags["cv"]:
             k = flags["fold_num"]
@@ -667,7 +694,9 @@ def main(flags):
 
                 # arguments to callables
                 extra_init_args = {"mode": "regression",
-                                   "cuda_devices": cuda_devices}
+                                   "cuda_devices": cuda_devices,
+                                   "protein_profile": prot_profile,
+                                   "protein_embeddings": pretrained_embeddings}
                 extra_data_args = {"flags": flags,
                                    "data_dict": data_dict}
                 extra_train_args = {"transformers_dict": transformers_dict,
@@ -706,13 +735,14 @@ def main(flags):
                 print("Best params = {}".format(stats.best(m="max")))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, sim_label,
-                             summary_writer_creator)
+                             prot_profile, pretrained_embeddings, summary_writer_creator)
 
     # save simulation data resource tree to file.
     # sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, tb_writer):
+def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, protein_profile,
+                 protein_embeddings, tb_writer):
     hyper_params = default_hparams_bopt(flags)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
@@ -723,17 +753,19 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
             start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                       transformers_dict, view, k, tb_writer)
+                       transformers_dict, view, protein_profile, protein_embeddings, k, tb_writer)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                   transformers_dict, view, tb_writer)
+                   transformers_dict, view, protein_profile, protein_embeddings, tb_writer)
 
 
-def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer, transformers_dict, view,
-               k=None, tb_writer=None):
+def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
+               transformers_dict, view, protein_profile, protein_embeddings, k=None, tb_writer=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics, \
     prot_model_type, frozen_models = trainer.initialize(hparams=hyper_params, train_dataset=data["train"],
+                                                        protein_profile=protein_profile,
+                                                        protein_embeddings=protein_embeddings,
                                                         val_dataset=data["val"], test_dataset=data["test"])
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
@@ -766,8 +798,8 @@ def default_hparams_rand(flags):
         "dprob": 0.0739227,
 
         "tr_batch_size": 256,
-        "val_batch_size": 512,
-        "test_batch_size": 512,
+        "val_batch_size": 128,
+        "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "rmsprop",
@@ -804,18 +836,22 @@ def default_hparams_rand(flags):
 def default_hparams_bopt(flags):
     """
     protein model types:
-    --------------------
+    --------------------------------------------------------------------------------------------
     short name  | full name
-    ------------|---------------------------------------------------------------------------
+    ------------|-------------------------------------------------------------------------------
     psc         | Protein Sequence Composition
-    ------------|---------------------------------------------------------------------------
+    ------------|-------------------------------------------------------------------------------
     p2v         | Protein to Vector / Embeddings using n-gram amino acid 'words'.
-    ------------|---------------------------------------------------------------------------
+    ------------|-------------------------------------------------------------------------------
     rnn         | Uses embeddings and an RNN variant (e.g. LSTM) to learn protein features.
-    ------------|---------------------------------------------------------------------------
-    NOTE: The p2v and rnn model types require pretrained protein embeddings.
+    ------------|-------------------------------------------------------------------------------
+    pcnn        | Protein CNN: https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+                | The final output is a 1D vector for each protein in a batch.
+    ------------|-------------------------------------------------------------------------------
+    pcnn2d      | A variant of PCNN that returns a 2D tensor for each protein in a batch.
+    ------------|-------------------------------------------------------------------------------
+    NOTE: All protein models, except 'psc' and 'p2v', use embeddings from the :class:Prot2Vec module.
     """
-    prot_model = "psc"
     return {
         "attn_heads": 4,
         "attn_layers": 1,
@@ -838,13 +874,31 @@ def default_hparams_bopt(flags):
         "optimizer__global__weight_decay": 0.0009,
         "optimizer__global__lr": 0.0006,
         "prot": {
-            "model_type": prot_model,
-            "in_dim": 8421,
-            "dim": 8421 if prot_model == "psc" else flags["embeddings_dim"],
+            "model_type": flags["prot_model_type"],
             "vocab_size": flags["prot_vocab_size"],
-            "protein_profile": flags["protein_profile"],
-            "rnn_hidden_dim": 128,
-            "protein_embeddings": flags["protein_embeddings"]
+            "window": flags["window"],
+            "prot_cnn_num_layers": 2,
+
+            # protein model type configs
+            "psc": {
+                "dim": 8421,
+                "in_dim": 8421,
+            },
+            "p2v": {
+                "dim": flags["embeddings_dim"] * flags["window"]
+            },
+            "rnn": {
+                "in_dim": flags["embeddings_dim"],
+                "dim": 128,
+            },
+            "pcnn": {
+                "dim": flags["embeddings_dim"],
+                "num_layers": 2
+            },
+            "pcnn2d": {
+                "dim": flags["embeddings_dim"],
+                "num_layers": 2
+            }
         },
         "weave": {
             "dim": 50,

@@ -865,18 +865,22 @@ def default_hparams_rand(flags):
 def default_hparams_bopt(flags):
     """
     protein model types:
-    --------------------
+    --------------------------------------------------------------------------------------------
     short name  | full name
-    ------------|---------------------------------------------------------------------------
+    ------------|-------------------------------------------------------------------------------
     psc         | Protein Sequence Composition
-    ------------|---------------------------------------------------------------------------
+    ------------|-------------------------------------------------------------------------------
     p2v         | Protein to Vector / Embeddings using n-gram amino acid 'words'.
-    ------------|---------------------------------------------------------------------------
+    ------------|-------------------------------------------------------------------------------
     rnn         | Uses embeddings and an RNN variant (e.g. LSTM) to learn protein features.
-    ------------|---------------------------------------------------------------------------
-    NOTE: The p2v and rnn model types require pretrained protein embeddings.
+    ------------|-------------------------------------------------------------------------------
+    pcnn        | Protein CNN: https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+                | The final output is a 1D vector for each protein in a batch.
+    ------------|-------------------------------------------------------------------------------
+    pcnn2d      | A variant of PCNN that returns a 2D tensor for each protein in a batch.
+    ------------|-------------------------------------------------------------------------------
+    NOTE: All protein models, except 'psc' and 'p2v', use embeddings from the :class:Prot2Vec module.
     """
-    # prot_model = "rnn"
     return {
         "prot_vocab_size": flags["prot_vocab_size"],
         "attn_heads": 4,

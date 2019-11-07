@@ -32,8 +32,8 @@ from ivpgan import cuda
 from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
 from ivpgan.metrics import compute_model_performance
 from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather
-from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, ProtCNN, \
-    ProtCnnForward, GraphNeuralNet
+from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, ProteinCNNAttention, \
+    ProtCnnForward, GraphNeuralNet, Prot2Vec
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from ivpgan.utils.io import load_model, save_model, load_pickle, load_numpy_array
@@ -46,7 +46,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 seeds = [123, 124, 125]
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 
 def create_ecfp_net(hparams):
@@ -144,11 +144,14 @@ class CPIBaseline(Trainer):
         comp_model = create_comp_model(hparams)
         pt_embeddings = create_torch_embeddings(frozen_models_hook=frozen_models,
                                                 np_embeddings=protein_embeddings)
-        prot_model = ProtCNN(protein_profile=protein_profile,
-                             embeddings=pt_embeddings,
-                             window=hparams["prot"]["window"],
-                             num_layers=hparams["prot"]["prot_cnn_num_layers"])
-        comp_net_pcnn = ProtCnnForward(prot_cnn_model=prot_model, comp_model=comp_model)
+        comp_net_pcnn = ProtCnnForward(
+            prot2vec=Prot2Vec(protein_profile=protein_profile,
+                              embeddings=pt_embeddings,
+                              batch_first=True),
+            prot_cnn_model=ProteinCNNAttention(dim=hparams["prot"]["dim"],
+                                               window=hparams["prot"]["window"],
+                                               num_layers=hparams["prot"]["prot_cnn_num_layers"]),
+            comp_model=comp_model)
 
         p = 2 * hparams["prot"]["dim"]
         layers = [comp_net_pcnn]

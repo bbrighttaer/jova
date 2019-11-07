@@ -14,8 +14,8 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.nn.init as init
 import torch.nn.functional as F
+import torch.nn.init as init
 
 from ivpgan.nn.layers import Linear, Conv1d, Conv2d, ConcatLayer, WeaveGather2D
 from ivpgan.nn.layers import WeaveGather, WeaveLayer, GraphConvLayer, GraphGather, GraphPool, WeaveBatchNorm, \
@@ -349,6 +349,69 @@ class GraphConvSequential(nn.Sequential):
         return input[0]
 
 
+class GraphNeuralNet(nn.Module):
+    """
+    Wrapper for the GNN work in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+    """
+
+    def __init__(self, num_fingerprints, embedding_dim, num_layers=3, update='mean', activation='relu'):
+        super(GraphNeuralNet, self).__init__()
+        self.output = update
+        self.activation = get_activation_func(activation)
+        self.embed_fingerprint = nn.Embedding(num_fingerprints, embedding_dim)
+        self.W_gnn = nn.ModuleList([nn.Linear(embedding_dim, embedding_dim) for _ in range(num_layers)])
+
+    def update_fingerprints(self, xs, A, M, i):
+        """Update the node vectors in a graph
+        considering their neighboring node vectors (i.e., sum or mean),
+        which are non-linear transformed by neural network."""
+        hs = self.activation(self.W_gnn[i](xs))
+        if self.output == 'sum':
+            return xs + torch.matmul(A, hs)
+        else:
+            return xs + torch.matmul(A, hs) / (M - 1)
+
+    def forward(self, inputs):
+        fingerprints, adjacency_matrices, M, axis = inputs
+
+        fingerprints = self.embed_fingerprint(fingerprints)
+
+        for i in range(len(self.W_gnn)):
+            fingerprints = self.update_fingerprints(fingerprints, adjacency_matrices, M, i)
+
+        if self.output == 'sum':
+            molecular_vectors = self.sum_axis(fingerprints, axis)
+        else:
+            molecular_vectors = self.mean_axis(fingerprints, axis)
+
+        return molecular_vectors
+
+    def sum_axis(self, xs, axis):
+        y = [torch.sum(x, 0) for x in torch.split(xs, axis)]
+        return torch.stack(y)
+
+    def mean_axis(self, xs, axis):
+        y = [torch.mean(x, 0) for x in torch.split(xs, axis)]
+        return torch.stack(y)
+
+
+class GraphNeuralNet2D(GraphNeuralNet):
+
+    def forward(self, inputs):
+        fingerprints, adjacency_matrices, M, axis = inputs
+
+        fingerprints = self.embed_fingerprint(fingerprints)
+
+        for i in range(len(self.W_gnn)):
+            fingerprints = self.update_fingerprints(fingerprints, adjacency_matrices, M, i)
+
+        mols = torch.split(fingerprints, axis)
+        max_seg = max([len(m) for m in mols])
+        mols = [F.pad(mol, (0, 0, 0, max_seg - len(mol))) for mol in mols]
+        mols = torch.stack(mols, 1)
+        return mols
+
+
 class PairSequential(nn.Module):
     """Handy approach to manage protein and compound models"""
 
@@ -637,6 +700,134 @@ class Prot2Vec(nn.Module):
         return embeddings
 
 
+class ProteinCNN(nn.Module):
+    """
+    Implements Protein CNN without Attention
+    """
+
+    def __init__(self, dim, window, activation='relu', num_layers=2, pooling_dim=1):
+        """
+
+        :param dim: int
+            final dimension of the protein representation
+        :param activation:
+            non-linearity to apply to logits
+        :param window:
+            max size of grouped amino acids
+        :param num_layers: int
+            Number of convolution layers
+        :param pooling_dim: int
+            The dimension to be used in reducing protein segments to form a vector representation of the protein.
+        """
+        super(ProteinCNN, self).__init__()
+        self.activation = get_activation_func(activation)
+        self.pooling_dim = pooling_dim
+        self.lin_kernels = nn.ModuleList([nn.Linear(dim * window, dim * window) for _ in range(num_layers - 1)])
+        self.lin_kernels.append(nn.Linear(dim * window, dim))
+
+    def forward(self, prot_x):
+        """
+        Protein CNN without attention as described in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+        :param x: tensor,
+            3D protein embeddings. [batch_size, number of segments/groups, window * dimension]
+            Supplied by the Prot2Vec model.
+        :return: 2D tensor [batch_size, dimension]
+        """
+        # apply convolution
+        for kernel in self.lin_kernels:
+            prot_x = self.activation(kernel(prot_x))
+
+        # Output: protein vector representation
+        prot_x = torch.mean(prot_x, dim=self.pooling_dim, keepdim=True)
+        return prot_x
+
+
+class ProteinCNN2D(ProteinCNN):
+
+    def forward(self, prot_x):
+        """
+        Protein CNN without attention as described in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+        :param x: 3D protein embeddings.
+        :return: 3D tensor
+        """
+        # apply convolution
+        for kernel in self.lin_kernels:
+            prot_x = self.activation(kernel(prot_x))
+        return prot_x
+
+
+class ProteinCNNAttention(ProteinCNN):
+    """
+    Implementation of the Protein CNN (with attention)
+    presented in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+    All credits to the work above for the initial implementation which this implementation builds on.
+    """
+
+    def __init__(self, dim, activation='relu', window=11, num_layers=3):
+        super(ProteinCNNAttention, self).__init__(dim, activation, window, num_layers)
+        self.W_attention = nn.Linear(dim, dim)
+
+    def forward(self, prot_x, comp_x):
+        """
+        Applies the Protein CNN and attention mechanism using the compound representation provided as described
+        in the above cited paper.
+
+        :param prot_x: tensor
+            protein embeddings.
+        :param comp_x: tensor
+            A 2D tensor of shape [batch_size, rep_dimension]
+        :return: tensor
+            A 2D tensor representing the representations of the proteins.
+        """
+
+        # apply convolution
+        for kernel in self.lin_kernels:
+            prot_x = self.activation(kernel(prot_x))
+
+        # Attention
+        h_comp = torch.relu(self.W_attention(comp_x)).unsqueeze(1)
+        h_prot = torch.relu(self.W_attention(prot_x))
+        wts = h_comp.bmm(h_prot.permute(0, 2, 1))
+        attn_weights = torch.softmax(wts, dim=2)
+        prot_out = attn_weights.permute(0, 2, 1) * h_prot
+        prot_out = torch.mean(prot_out, dim=1).reshape(len(prot_x), -1)
+        return prot_out
+
+
+class ProtCnnForward(nn.Module):
+    """
+    Helper forward propagation module for :class:ProtCNN
+    """
+
+    def __init__(self, prot2vec, prot_cnn_model, comp_model):
+        """
+        Note: The final dimension of the proteins and compounds must be equal due to the PCNN attention calculation.
+        :param prot_cnn_model:
+            protein model
+        :param comp_model:
+            compound model
+        """
+        super(ProtCnnForward, self).__init__()
+        self.prot2vec = prot2vec
+        self.pcnn = prot_cnn_model
+        self.gnet = comp_model
+
+    def forward(self, inputs):
+        """
+        First get the compound representations and then forward them to the protein CNN.
+        This is necessary since the compound features are used in the ProtCNN attention weights calculation.
+
+        :param inputs: list
+        :return:
+        """
+        prot_input, comp_input = inputs
+        comp_out = self.gnet(comp_input)
+        prot_input = self.prot2vec(prot_input)
+        prot_out = self.pcnn(prot_input, comp_out)
+        out = torch.cat([comp_out, prot_out], dim=1)
+        return out
+
+
 class TwoWayForward(nn.Module):
 
     def __init__(self, model1, model2):
@@ -791,151 +982,3 @@ class SegmentWiseResBlock(nn.Module):
         x = x + self.seg_lin(x)
         x = self.batch_norm(x.view(num_seg * bsize, d_model)).view(num_seg, bsize, d_model)
         return x
-
-
-class ProtCNN(nn.Module):
-    """
-    Implementation of the Protein CNN presented in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
-    All credits to the work above for the initial implementation which this implementation builds on.
-    """
-
-    def __init__(self, protein_profile, embeddings, activation='relu', window=11, num_layers=3):
-        super(ProtCNN, self).__init__()
-        self.embeddings = embeddings
-        self.activation = get_activation_func(activation)
-        self.protein_profile = protein_profile
-        self.window = window
-        self.dim = embeddings.weight.shape[1]
-        self.num_layers = num_layers
-        self.W_attention = nn.Linear(self.dim, self.dim)
-        self.lin_kernels = nn.ModuleList([nn.Linear(self.dim * self.window,
-                                                    self.dim * self.window) for _ in range(num_layers - 1)])
-        self.lin_kernels.append(nn.Linear(self.dim * self.window, self.dim))
-
-    def forward(self, prot_x, comp_x):
-        """
-        Applies the Protein CNN and attention mechanism using the compound representation provided as described
-        in the above cited paper.
-
-        :param prot_x: list
-            list of protein IDs for retrieving their embeddings.
-        :param comp_x: tensor
-            A 2D tensor of shape [batch_size, rep_dimension]
-        :return: tensor
-            A 2D tensor representing the representations of the proteins.
-        """
-        # get the embedding indices for this batch
-        x = _construct_embedding_indices(prot_x, self.protein_profile, self.embeddings.weight.device,
-                                         self.embeddings.weight.shape[0] - 1)
-
-        # get protein embeddings
-        embeddings = self.embeddings(x)
-        embeddings = embeddings.reshape(*embeddings.shape[:2], -1)
-
-        # apply convolution
-        for kernel in self.lin_kernels:
-            embeddings = self.activation(kernel(embeddings))
-
-        # Attention
-        h_comp = torch.relu(self.W_attention(comp_x)).unsqueeze(1)
-        h_prot = torch.relu(self.W_attention(embeddings))
-        wts = h_comp.bmm(h_prot.permute(0, 2, 1))
-        attn_weights = torch.softmax(wts, dim=2)
-        prot_out = attn_weights.permute(0, 2, 1) * h_prot
-        prot_out = torch.mean(prot_out, dim=1).reshape(len(prot_x), -1)
-        return prot_out
-
-
-class ProtCnnForward(nn.Module):
-    """
-    Helper forward propagation module for :class:ProtCNN
-    """
-
-    def __init__(self, prot_cnn_model, comp_model):
-        """
-        Note: The final dimension of the proteins and compounds must be equal due to the PCNN attention calculation.
-        :param prot_cnn_model:
-            protein model
-        :param comp_model:
-            compound model
-        """
-        super(ProtCnnForward, self).__init__()
-        self.pcnn = prot_cnn_model
-        self.gnet = comp_model
-
-    def forward(self, inputs):
-        """
-        First get the compound representations and then forward them to the protein CNN.
-        This is necessary since the compound features are used in the ProtCNN attention weights calculation.
-
-        :param inputs: list
-        :return:
-        """
-        prot_input, comp_input = inputs
-        comp_out = self.gnet(comp_input)
-        prot_out = self.pcnn(prot_input, comp_out)
-        out = torch.cat([comp_out, prot_out], dim=1)
-        return out
-
-
-class GraphNeuralNet(nn.Module):
-    """
-    Wrapper for the GNN work in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
-    """
-
-    def __init__(self, num_fingerprints, embedding_dim, num_layers=3, update='mean', activation='relu'):
-        super(GraphNeuralNet, self).__init__()
-        self.output = update
-        self.activation = get_activation_func(activation)
-        self.embed_fingerprint = nn.Embedding(num_fingerprints, embedding_dim)
-        self.W_gnn = nn.ModuleList([nn.Linear(embedding_dim, embedding_dim) for _ in range(num_layers)])
-
-    def update_fingerprints(self, xs, A, M, i):
-        """Update the node vectors in a graph
-        considering their neighboring node vectors (i.e., sum or mean),
-        which are non-linear transformed by neural network."""
-        hs = self.activation(self.W_gnn[i](xs))
-        if self.output == 'sum':
-            return xs + torch.matmul(A, hs)
-        else:
-            return xs + torch.matmul(A, hs) / (M - 1)
-
-    def forward(self, inputs):
-        fingerprints, adjacency_matrices, M, axis = inputs
-
-        fingerprints = self.embed_fingerprint(fingerprints)
-
-        for i in range(len(self.W_gnn)):
-            fingerprints = self.update_fingerprints(fingerprints, adjacency_matrices, M, i)
-
-        if self.output == 'sum':
-            molecular_vectors = self.sum_axis(fingerprints, axis)
-        else:
-            molecular_vectors = self.mean_axis(fingerprints, axis)
-
-        return molecular_vectors
-
-    def sum_axis(self, xs, axis):
-        y = [torch.sum(x, 0) for x in torch.split(xs, axis)]
-        return torch.stack(y)
-
-    def mean_axis(self, xs, axis):
-        y = [torch.mean(x, 0) for x in torch.split(xs, axis)]
-        return torch.stack(y)
-
-
-class GraphNeuralNet2D(GraphNeuralNet):
-
-    def forward(self, inputs):
-        fingerprints, adjacency_matrices, M, axis = inputs
-
-        fingerprints = self.embed_fingerprint(fingerprints)
-
-        for i in range(len(self.W_gnn)):
-            fingerprints = self.update_fingerprints(fingerprints, adjacency_matrices, M, i)
-
-        mols = torch.split(fingerprints, axis)
-        max_seg = max([len(m) for m in mols])
-        mols = [F.pad(mol, (0, 0, 0, max_seg - len(mol))) for mol in mols]
-        mols = torch.stack(mols, 1)
-        return mols

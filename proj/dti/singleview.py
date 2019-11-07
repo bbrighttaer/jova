@@ -34,7 +34,7 @@ from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, ConcatLayer
 from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential, GraphNeuralNet
 from ivpgan.utils import Trainer, io
 from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
-from ivpgan.utils.io import load_model, save_model, load_pickle
+from ivpgan.utils.io import load_model, save_model, load_pickle, load_numpy_array
 from ivpgan.utils.math import ExpAverage
 from ivpgan.utils.sim_data import DataNode
 from ivpgan.utils.train_helpers import count_parameters
@@ -46,10 +46,10 @@ seeds = [123, 124, 125]
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 
-def create_ecfp_net(hparams):
+def create_ecfp_net(hparams, protein_profile, protein_embeddings):
     civ_dim = hparams["prot_dim"] + hparams["comp_dim"]
     fcn_args = []
     p = civ_dim
@@ -164,7 +164,8 @@ def create_gnn_net(hparams):
 class SingleViewDTI(Trainer):
 
     @staticmethod
-    def initialize(hparams, train_dataset, val_dataset, test_dataset, cuda_devices=None, mode="regression"):
+    def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, protein_embeddings,
+                   cuda_devices=None, mode="regression"):
 
         # create network
         create_func = {"ecfp4": create_ecfp_net,
@@ -172,7 +173,7 @@ class SingleViewDTI(Trainer):
                        "weave": create_weave_net,
                        "gconv": create_gconv_net,
                        "gnn": create_gnn_net}.get(hparams["view"])
-        model = create_func(hparams)
+        model = create_func(hparams, protein_profile, protein_embeddings)
         print("Number of trainable parameters = {}".format(count_parameters(model)))
         if cuda:
             model = model.cuda()
@@ -473,6 +474,7 @@ class SingleViewDTI(Trainer):
 
 
 def main(flags):
+    flags["prot_model_type"] = "psc"
     if len(flags["views"]) > 0:
         print("Single views for training:", flags["views"])
     else:
@@ -496,6 +498,11 @@ def main(flags):
         cuda_devices = None if num_cuda_dvcs == 1 else [i for i in range(1, num_cuda_dvcs)]
 
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
+        prot_profile = load_pickle(file_name=flags['prot_profile'])
+        prot_vocab = load_pickle(file_name=flags['prot_vocab'])
+        pretrained_embeddings = load_numpy_array(flags['protein_embeddings'])
+        flags["prot_vocab_size"] = len(prot_vocab)
+        flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
 
         # For searching over multiple seeds
         hparam_search = None
@@ -548,7 +555,9 @@ def main(flags):
 
                 # arguments to callables
                 extra_init_args = {"mode": "regression",
-                                   "cuda_devices": cuda_devices}
+                                   "cuda_devices": cuda_devices,
+                                   "protein_profile": prot_profile,
+                                   "protein_embeddings": pretrained_embeddings}
                 extra_data_args = {"flags": flags,
                                    "data_dict": data_dict}
                 extra_train_args = {"transformers_dict": transformers_dict,
@@ -586,13 +595,15 @@ def main(flags):
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view)
+                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
+                             prot_profile, pretrained_embeddings)
 
         # save simulation data resource tree to file.
         # sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view):
+def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
+                 prot_profile, pretrained_embeddings):
     hyper_params = default_hparams_bopt(flags, view)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
@@ -603,19 +614,21 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
             start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                       transformers_dict, view, k)
+                       transformers_dict, view, prot_profile, pretrained_embeddings, k)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                   transformers_dict, view)
+                   transformers_dict, view, prot_profile, pretrained_embeddings)
 
 
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-               transformers_dict, view, k=None):
+               transformers_dict, view, protein_profile, protein_embeddings, k=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics = trainer.initialize(hparams=hyper_params,
                                                                  train_dataset=data["train"],
                                                                  val_dataset=data["val"],
-                                                                 test_dataset=data["test"])
+                                                                 test_dataset=data["test"],
+                                                                 protein_profile=protein_profile,
+                                                                 protein_embeddings=protein_embeddings)
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
@@ -691,6 +704,15 @@ def default_hparams_bopt(flags, view):
         "optimizer__global__weight_decay": 0.004665,
         "optimizer__global__lr": 0.04158,
         "optimizer__adadelta__rho": 0.115873,
+
+        "prot": {
+            "model_type": flags["prot_model_type"],
+            "in_dim": 8421,
+            "dim": 8421 if flags["prot_model_type"] == "psc" else flags["embeddings_dim"],
+            "vocab_size": flags["prot_vocab_size"],
+            "window": 32,
+            "rnn_hidden_state_dim": 100
+        },
 
         "gnn": {
             "fingerprint_size": len(flags["gnn_fingerprint"]) if flags["gnn_fingerprint"] is not None else 0,
@@ -822,11 +844,19 @@ if __name__ == '__main__':
                         action='append',
                         help='A list containing paths to protein descriptors.'
                         )
-    # parser.add_argument('--seed',
-    #                     type=int,
-    #                     action="append",
-    #                     default=[123, 124, 125],
-    #                     help='Random seeds to be used.')
+    parser.add_argument('--prot_profile',
+                        type=str,
+                        help='A resource for retrieving embedding indexing profile of proteins.'
+                        )
+    parser.add_argument('--prot_vocab',
+                        type=str,
+                        help='A resource containing all N-gram segments/words constructed from the protein sequences.'
+                        )
+    parser.add_argument('--prot_embeddings',
+                        type=str,
+                        dest="protein_embeddings",
+                        help='Numpy array file containing the pretrained protein "words" embeddings'
+                        )
     parser.add_argument('--no_reload',
                         action="store_false",
                         dest='reload',
@@ -875,6 +905,9 @@ if __name__ == '__main__':
     FLAGS['model_dir'] = args.model_dir
     FLAGS['model_name'] = args.model_name
     FLAGS['prot_desc_path'] = args.prot_desc_path
+    FLAGS['prot_profile'] = args.prot_profile
+    FLAGS['prot_vocab'] = args.prot_vocab
+    FLAGS['protein_embeddings'] = args.protein_embeddings
     # FLAGS['seeds'] = args.seed
     FLAGS['reload'] = args.reload
     FLAGS['data_dir'] = args.data_dir
