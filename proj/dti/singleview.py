@@ -533,8 +533,8 @@ def main(flags):
             transformers_dict[view] = data_dict[view][2]
 
             # Fingerprint dict for GNN if available
-            if flags["gnn_fingerprint"] is not None:
-                flags["gnn_fingerprint"] = load_pickle(file_name=flags["gnn_fingerprint"])
+            if flags["gnnet_fingerprint"] is not None:
+                flags["gnn_fingerprint"] = load_pickle(file_name=flags["gnnet_fingerprint"])
 
             tasks = data_dict[view][0]
             # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
@@ -752,34 +752,34 @@ def get_hparam_config(flags, view):
             "dim": DiscreteParam(min=64, max=512),
         }),
 
-        # SGD
-        "optimizer__sgd__nesterov": CategoricalParam(choices=[True, False]),
-        "optimizer__sgd__momentum": LogRealParam(),
-        # "optimizer__sgd__lr": LogRealParam(),
-
-        # ADAM
-        # "optimizer__adam__lr": LogRealParam(),
-        "optimizer__adam__amsgrad": CategoricalParam(choices=[True, False]),
-
-        # Adadelta
-        # "optimizer__adadelta__lr": LogRealParam(),
-        # "optimizer__adadelta__weight_decay": LogRealParam(),
-        "optimizer__adadelta__rho": LogRealParam(),
-
-        # Adagrad
-        # "optimizer__adagrad__lr": LogRealParam(),
-        "optimizer__adagrad__lr_decay": LogRealParam(),
-        # "optimizer__adagrad__weight_decay": LogRealParam(),
-
-        # Adamax
-        # "optimizer__adamax__lr": LogRealParam(),
-        # "optimizer__adamax__weight_decay": LogRealParam(),
-
-        # RMSprop
-        # "optimizer__rmsprop__lr": LogRealParam(),
-        # "optimizer__rmsprop__weight_decay": LogRealParam(),
-        "optimizer__rmsprop__momentum": LogRealParam(),
-        # "optimizer__rmsprop__centered": CategoricalParam(choices=[True, False])
+        # # SGD
+        # "optimizer__sgd__nesterov": CategoricalParam(choices=[True, False]),
+        # "optimizer__sgd__momentum": LogRealParam(),
+        # # "optimizer__sgd__lr": LogRealParam(),
+        #
+        # # ADAM
+        # # "optimizer__adam__lr": LogRealParam(),
+        # "optimizer__adam__amsgrad": CategoricalParam(choices=[True, False]),
+        #
+        # # Adadelta
+        # # "optimizer__adadelta__lr": LogRealParam(),
+        # # "optimizer__adadelta__weight_decay": LogRealParam(),
+        # "optimizer__adadelta__rho": LogRealParam(),
+        #
+        # # Adagrad
+        # # "optimizer__adagrad__lr": LogRealParam(),
+        # "optimizer__adagrad__lr_decay": LogRealParam(),
+        # # "optimizer__adagrad__weight_decay": LogRealParam(),
+        #
+        # # Adamax
+        # # "optimizer__adamax__lr": LogRealParam(),
+        # # "optimizer__adamax__weight_decay": LogRealParam(),
+        #
+        # # RMSprop
+        # # "optimizer__rmsprop__lr": LogRealParam(),
+        # # "optimizer__rmsprop__weight_decay": LogRealParam(),
+        # "optimizer__rmsprop__momentum": LogRealParam(),
+        # # "optimizer__rmsprop__centered": CategoricalParam(choices=[True, False])
 
     }
 
@@ -890,7 +890,7 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--gnn_fingerprint",
+    parser.add_argument("--gnnet_fingerprint",
                         default=None,
                         type=str,
                         help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
@@ -924,6 +924,6 @@ if __name__ == '__main__':
     FLAGS["views"] = args.view
     FLAGS["eval"] = args.eval
     FLAGS["eval_model_name"] = args.eval_model_name
-    FLAGS["gnn_fingerprint"] = args.gnn_fingerprint
+    FLAGS["gnnet_fingerprint"] = args.gnnet_fingerprint
 
     main(flags=FLAGS)

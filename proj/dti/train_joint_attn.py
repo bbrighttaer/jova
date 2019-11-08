@@ -53,13 +53,13 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(3)
 
 use_ecfp8 = True
 use_weave = False
-use_gconv = True
+use_gconv = False
 use_prot = True
-use_gnn = False
+use_gnn = True
 
 
 def create_ecfp_net(hparams):
@@ -642,7 +642,7 @@ def main(flags):
     if use_gnn:
         comp_lbl.append("gnn")
     comp_lbl = '_'.join(comp_lbl)
-    flags["prot_model_types"] = ["pcnn2d"]
+    flags["prot_model_types"] = ["psc", "pcnn2d"]
     sim_label = "integrated_view_attn_no_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
     print("CUDA={}, view={}".format(cuda, sim_label))
 
@@ -714,8 +714,8 @@ def main(flags):
         trainer = IntegratedViewDTI()
 
         # Fingerprint dict for GNN if available
-        if flags.gnn_fingerprint is not None:
-            flags["gnn_fingerprint"] = load_pickle(file_name=flags.gnn_fingerprint)
+        if flags.gnnet_fingerprint is not None:
+            flags["gnn_fingerprint"] = load_pickle(file_name=flags.gnnet_fingerprint)
 
         if flags["cv"]:
             k = flags["fold_num"]
@@ -1132,7 +1132,7 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--gnn_fingerprint",
+    parser.add_argument("--gnnet_fingerprint",
                         default=None,
                         type=str,
                         help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
