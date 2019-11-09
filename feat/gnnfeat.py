@@ -1,6 +1,6 @@
 # Re-organization of the GNN work in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 10/29/19
 # Time: 2:12 AM
 # File: gnnfeat.py

@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 7/17/19
 # Time: 6:00 PM
 # File: worker.py

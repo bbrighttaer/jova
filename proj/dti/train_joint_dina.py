@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 10/17/19
 # Time: 10:23 AM
 # File: train_joint_dina_gan.py
@@ -25,21 +25,21 @@ from soek import RealParam, DictParam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import ivpgan.metrics as mt
-from ivpgan import cuda
-from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
+import jova.metrics as mt
+from jova import cuda
+from jova.data import batch_collator, get_data, load_proteins, DtiDataset
 from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
 from soek.rand import RandomSearchCV
-from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
-from ivpgan.nn.models import GraphConvSequential, create_fcn_layers, WeaveModel, NwayForward, DINA, Projector, \
+from jova.metrics import compute_model_performance
+from jova.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D
+from jova.nn.models import GraphConvSequential, create_fcn_layers, WeaveModel, NwayForward, DINA, Projector, \
     ProteinRNN
-from ivpgan.utils import Trainer, io
-from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
-from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters
-from ivpgan.utils.io import load_pickle
+from jova.utils import Trainer, io
+from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.sim_data import DataNode
+from jova.utils.train_helpers import count_parameters
+from jova.utils.io import load_pickle
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -851,7 +851,7 @@ class Flags(object):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="DTI with ivpgan model training.")
+    parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
     parser.add_argument("--dataset",
                         type=str,

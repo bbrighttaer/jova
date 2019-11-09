@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 10/17/19
 # Time: 11:24 PM
 # File: build_prot_vocabs.py

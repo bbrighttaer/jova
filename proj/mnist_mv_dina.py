@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 8/19/19
 # Time: 9:51 AM
 # File: mnist_mv.py
@@ -27,15 +27,15 @@ from soek import RandomSearchCV, BayesianOptSearchCV, ConstantParam, RealParam, 
     LogRealParam
 from tqdm import tqdm
 
-from ivpgan import cuda
-from ivpgan.data import Dataset
-from ivpgan.nn.layers import Flatten, ConcatLayer
-from ivpgan.nn.models import NonsatActivation, create_fcn_layers, NwayForward, DINA, Projector
-from ivpgan.utils import Trainer
-from ivpgan.utils.math import ExpAverage
-from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import load_data, split_mnist, trim_mnist, count_parameters, GradStats
-from ivpgan.utils.io import save_model, load_model
+from jova import cuda
+from jova.data import Dataset
+from jova.nn.layers import Flatten, ConcatLayer
+from jova.nn.models import NonsatActivation, create_fcn_layers, NwayForward, DINA, Projector
+from jova.utils import Trainer
+from jova.utils.math import ExpAverage
+from jova.utils.sim_data import DataNode
+from jova.utils.train_helpers import load_data, split_mnist, trim_mnist, count_parameters, GradStats
+from jova.utils.io import save_model, load_model
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")

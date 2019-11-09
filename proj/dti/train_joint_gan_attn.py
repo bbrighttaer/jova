@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 7/22/19
 # Time: 10:47 AM
 # File: train_joint.py
@@ -25,23 +25,23 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-import ivpgan.metrics as mt
-from ivpgan import cuda
-from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
+import jova.metrics as mt
+from jova import cuda
+from jova.data import batch_collator, get_data, load_proteins, DtiDataset
 from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam, RealParam
 from soek.rand import RandomSearchCV
-from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, GraphGather2D, Unsqueeze
-from ivpgan.nn.models import GraphConvSequential, PairSequential, create_fcn_layers, NwayForward, JointAttention, \
+from jova.metrics import compute_model_performance
+from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather, GraphGather2D, Unsqueeze
+from jova.nn.models import GraphConvSequential, PairSequential, create_fcn_layers, NwayForward, JointAttention, \
     WeaveModel, Prot2Vec, ProteinRNN
-from ivpgan.utils import Trainer, io
-from ivpgan.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
-from ivpgan.utils.math import ExpAverage, Count
-from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.tb import TBMeanTracker
-from ivpgan.utils.train_helpers import count_parameters, GradStats, create_torch_embeddings, FrozenModels
-from ivpgan.utils.io import load_pickle, load_numpy_array
+from jova.utils import Trainer, io
+from jova.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
+from jova.utils.math import ExpAverage, Count
+from jova.utils.sim_data import DataNode
+from jova.utils.tb import TBMeanTracker
+from jova.utils.train_helpers import count_parameters, GradStats, create_torch_embeddings, FrozenModels
+from jova.utils.io import load_pickle, load_numpy_array
 import logging
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filename='error.log')
@@ -1017,7 +1017,7 @@ class Flags(object):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="DTI with ivpgan model training.")
+    parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
     parser.add_argument("--dataset",
                         type=str,

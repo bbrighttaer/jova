@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 10/17/19
 # Time: 10:23 AM
 # File: train_joint_dina_gan.py
@@ -29,20 +29,20 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-import ivpgan.metrics as mt
-from ivpgan import cuda
-from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
-from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D, ElementwiseBatchNorm
-from ivpgan.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN, \
+import jova.metrics as mt
+from jova import cuda
+from jova.data import batch_collator, get_data, load_proteins, DtiDataset
+from jova.metrics import compute_model_performance
+from jova.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D, ElementwiseBatchNorm
+from jova.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN, \
     GraphNeuralNet2D, ProteinCNN2D, ProteinCNN
-from ivpgan.utils import Trainer, io
-from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
-from ivpgan.utils.io import load_pickle
-from ivpgan.utils.math import ExpAverage, Count
-from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.tb import TBMeanTracker
-from ivpgan.utils.train_helpers import count_parameters, GradStats, FrozenModels
+from jova.utils import Trainer, io
+from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.io import load_pickle
+from jova.utils.math import ExpAverage, Count
+from jova.utils.sim_data import DataNode
+from jova.utils.tb import TBMeanTracker
+from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -53,13 +53,13 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(3)
+torch.cuda.set_device(2)
 
 use_ecfp8 = True
 use_weave = False
-use_gconv = False
+use_gconv = True
 use_prot = True
-use_gnn = True
+use_gnn = False
 
 
 def create_ecfp_net(hparams):
@@ -642,7 +642,7 @@ def main(flags):
     if use_gnn:
         comp_lbl.append("gnn")
     comp_lbl = '_'.join(comp_lbl)
-    flags["prot_model_types"] = ["psc", "pcnn2d"]
+    flags["prot_model_types"] = ["psc"]
     sim_label = "integrated_view_attn_no_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
     print("CUDA={}, view={}".format(cuda, sim_label))
 
@@ -1030,7 +1030,7 @@ class Flags(object):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="DTI with ivpgan model training.")
+    parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
     parser.add_argument("--dataset",
                         type=str,

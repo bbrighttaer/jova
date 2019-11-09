@@ -1,13 +1,12 @@
 # Author: bbrighttaer
 # Project: jova
-# Date: 10/29/19
-# Time: 2:12 AM
+# Date: 5/23/19
+# Time: 10:32 AM
 # File: __init__.py.py
 
 
-from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-
+from .template import Trainer

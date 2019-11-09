@@ -8,10 +8,10 @@
 from setuptools import setup
 
 setup(
-    name='ivpgan',
+    name='jova',
     version='0.0.1',
-    packages=['ivpgan', 'ivpgan.nn', 'ivpgan.nn.tests', 'ivpgan.utils', 'ivpgan.utils.tests',
-              'ivpgan.metrics'],
+    packages=['jova', 'jova.nn', 'jova.nn.tests', 'jova.utils', 'jova.utils.tests',
+              'jova.metrics'],
     url='',
     license='MIT',
     author='Brighter Agyemang',

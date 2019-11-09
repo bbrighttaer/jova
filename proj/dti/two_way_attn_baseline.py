@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 10/17/19
 # Time: 10:23 AM
 # File: two_way_attn_baseline.py
@@ -28,19 +28,19 @@ from soek.rand import RandomSearchCV
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import ivpgan.metrics as mt
-from ivpgan import cuda
-from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
-from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather2D, PreSiameseLinear, SiameseLinear, \
+import jova.metrics as mt
+from jova import cuda
+from jova.data import batch_collator, get_data, load_proteins, DtiDataset
+from jova.metrics import compute_model_performance
+from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather2D, PreSiameseLinear, SiameseLinear, \
     SiameseBatchNorm, SiameseNonlinearity, SiameseDropout, PairwiseDotProduct
-from ivpgan.nn.models import GraphConvSequential, WeaveModel, ProteinRNN, TwoWayForward, TwoWayAttention, Prot2Vec
-from ivpgan.utils import Trainer, io
-from ivpgan.utils.args import WeaveLayerArgs, WeaveGatherArgs
-from ivpgan.utils.io import load_pickle, load_numpy_array
-from ivpgan.utils.math import ExpAverage
-from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters, FrozenModels
+from jova.nn.models import GraphConvSequential, WeaveModel, ProteinRNN, TwoWayForward, TwoWayAttention, Prot2Vec
+from jova.utils import Trainer, io
+from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.io import load_pickle, load_numpy_array
+from jova.utils.math import ExpAverage
+from jova.utils.sim_data import DataNode
+from jova.utils.train_helpers import count_parameters, FrozenModels
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -844,7 +844,7 @@ class Flags(object):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="DTI with ivpgan model training.")
+    parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
     parser.add_argument("--dataset",
                         type=str,

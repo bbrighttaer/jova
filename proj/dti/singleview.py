@@ -1,5 +1,5 @@
 # Author: bbrighttaer
-# Project: ivpgan
+# Project: jova
 # Date: 7/2/19
 # Time: 1:24 PM
 # File: singleview.py
@@ -23,21 +23,21 @@ from deepchem.trans import undo_transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import ivpgan.metrics as mt
-from ivpgan import cuda
-from ivpgan.data import batch_collator, get_data, load_proteins, DtiDataset
+import jova.metrics as mt
+from jova import cuda
+from jova.data import batch_collator, get_data, load_proteins, DtiDataset
 from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam
 from soek.rand import RandomSearchCV
-from ivpgan.metrics import compute_model_performance
-from ivpgan.nn.layers import GraphConvLayer, GraphPool, GraphGather, ConcatLayer
-from ivpgan.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential, GraphNeuralNet
-from ivpgan.utils import Trainer, io
-from ivpgan.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
-from ivpgan.utils.io import load_model, save_model, load_pickle, load_numpy_array
-from ivpgan.utils.math import ExpAverage
-from ivpgan.utils.sim_data import DataNode
-from ivpgan.utils.train_helpers import count_parameters
+from jova.metrics import compute_model_performance
+from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather, ConcatLayer
+from jova.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential, GraphNeuralNet
+from jova.utils import Trainer, io
+from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.io import load_model, save_model, load_pickle, load_numpy_array
+from jova.utils.math import ExpAverage
+from jova.utils.sim_data import DataNode
+from jova.utils.train_helpers import count_parameters
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -175,8 +175,11 @@ class SingleViewDTI(Trainer):
                        "gnn": create_gnn_net}.get(hparams["view"])
         model = create_func(hparams)
         print("Number of trainable parameters = {}".format(count_parameters(model)))
-        if cuda:
-            model = model.cuda()
+        try:
+            if cuda:
+                model = model.cuda()
+        except RuntimeError as e:
+            print(str(e))
 
         # data loaders
         train_data_loader = DataLoader(dataset=train_dataset,
@@ -785,7 +788,7 @@ def get_hparam_config(flags, view):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="DTI with ivpgan model training.")
+    parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
     parser.add_argument("--dataset",
                         type=str,
