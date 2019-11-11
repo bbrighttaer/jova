@@ -77,11 +77,12 @@ def retrieve_resource_cv(k, seeds, r_name, r_data, res_names):
 
 
 if __name__ == '__main__':
-    folder = "eval_2019_08_16"
-    qualifier = "eval_2019_08_16"
+    chart_type = "png"
+    folder = "eval_2019_08_11"
+    qualifier = "eval_2019_08_11"
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
     files.sort()
-    results_folder = "results_" + folder
+    results_folder = "results_" + folder + '_' + chart_type
     os.makedirs(results_folder, exist_ok=True)
     for file in files:
         sns.set_style("darkgrid")
@@ -139,14 +140,14 @@ if __name__ == '__main__':
         f1 = sns.relplot(x="predicted value", y="true value", ax=ax, data=data)
         # f1.set_axis_labels("predicted value", "true value")
         # f1.set(xlabel="predicted value", ylabel="true value")
-        fig.savefig("./{}/{}_true-vs-pred.pdf".format(results_folder, root_name))
+        fig.savefig("./{}/{}_true-vs-pred.{}".format(results_folder, root_name, chart_type))
         plt.close(f1.fig)
 
         sns.set_style("white")
         f2 = sns.jointplot(x="predicted value", y="true value", data=data, kind='kde')  # , stat_func=pearsonr)
         # f2.annotate(pearsonr)
         # f2.set_axis_labels("predicted value", "true value")
-        f2.savefig("./{}/{}_joint.pdf".format(results_folder, root_name))
+        f2.savefig("./{}/{}_joint.{}".format(results_folder, root_name, chart_type))
         plt.close(f2.fig)
 
         print('-' * 100)

@@ -53,11 +53,11 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 use_ecfp8 = True
-use_weave = False
-use_gconv = True
+use_weave = True
+use_gconv = False
 use_prot = True
 use_gnn = False
 
@@ -146,7 +146,7 @@ def create_weave_net(hparams):
     )
     wg_args = WeaveGatherArgs(conv_out_depth=hparams["weave"]["dim"], gaussian_expand=True,
                               n_depth=hparams["weave"]["dim"])
-    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='1D')
+    weave_model = WeaveModel(weave_args, weave_gath_arg=wg_args, weave_type='2D')
     model = nn.Sequential(weave_model)
     return model
 
@@ -528,7 +528,7 @@ class IntegratedViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except RuntimeError as e:
+        except ValueError as e:
             print(str(e))
 
         duration = time.time() - start
@@ -714,8 +714,10 @@ def main(flags):
         trainer = IntegratedViewDTI()
 
         # Fingerprint dict for GNN if available
-        if flags.gnnet_fingerprint is not None:
+        if use_gnn and flags.gnnet_fingerprint is not None:
             flags["gnn_fingerprint"] = load_pickle(file_name=flags.gnnet_fingerprint)
+        else:
+            flags["gnn_fingerprint"] = None
 
         if flags["cv"]:
             k = flags["fold_num"]
@@ -932,7 +934,7 @@ def default_hparams_bopt(flags):
             "dim": 1024,
         },
         "gnn": {
-            "fingerprint_size": len(flags["gnn_fingerprint"]),
+            "fingerprint_size": len(flags["gnn_fingerprint"]) if use_gnn else 0,
             "num_layers": 3,
             "dim": 100,
         }
@@ -972,7 +974,7 @@ def get_hparam_config(flags):
             "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
         }),
         "weave": DictParam({
-            # "dim": DiscreteParam(min=64, max=512),
+            "dim": DiscreteParam(min=64, max=512),
             "update_pairs": ConstantParam(False),
         }),
         "gconv": DictParam({
@@ -982,7 +984,7 @@ def get_hparam_config(flags):
             "dim": ConstantParam(1024),
         }),
         "gnn": DictParam({
-            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"])),
+            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"]) if use_gnn else 0),
             "num_layers": DiscreteParam(1, 4),
             "dim": DiscreteParam(min=64, max=512),
         })

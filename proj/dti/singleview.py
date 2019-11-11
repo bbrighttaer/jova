@@ -42,8 +42,8 @@ from jova.utils.train_helpers import count_parameters
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [123, 124, 125]
-
+# seeds = [123, 124, 125]
+seeds = [1, 8, 64]
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
 # cuda = torch.cuda.is_available()
 torch.cuda.set_device(0)
