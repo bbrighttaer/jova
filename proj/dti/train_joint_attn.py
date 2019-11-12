@@ -673,8 +673,8 @@ def main(flags):
 
     for seed in seeds:
         summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
-                                                                                              dt.now().strftime(
-                                                                                                  "%Y_%m_%d__%H_%M_%S")))
+                                                                                          dt.now().strftime(
+                                                                                              "%Y_%m_%d__%H_%M_%S")))
 
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -804,17 +804,17 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                transformers_dict, view, protein_profile, protein_embeddings, k=None, tb_writer=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics, \
-    prot_model_type, frozen_models = trainer.initialize(hparams=hyper_params, train_dataset=data["train"],
-                                                        protein_profile=protein_profile,
-                                                        protein_embeddings=protein_embeddings,
-                                                        val_dataset=data["val"], test_dataset=data["test"])
+    prot_model_types, frozen_models = trainer.initialize(hparams=hyper_params, train_dataset=data["train"],
+                                                         protein_profile=protein_profile,
+                                                         protein_embeddings=protein_embeddings,
+                                                         val_dataset=data["val"], test_dataset=data["test"])
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict, prot_desc_dict,
                                tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_type,
+        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_types,
                                             frozen_models, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
                                             sim_data_node=sim_data_node, tb_writer=tb_writer)
         # Save the model.

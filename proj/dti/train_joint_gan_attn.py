@@ -32,9 +32,9 @@ from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam, RealParam
 from soek.rand import RandomSearchCV
 from jova.metrics import compute_model_performance
-from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather, GraphGather2D, Unsqueeze
+from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather, GraphGather2D, Unsqueeze, ElementwiseBatchNorm
 from jova.nn.models import GraphConvSequential, PairSequential, create_fcn_layers, NwayForward, JointAttention, \
-    WeaveModel, Prot2Vec, ProteinRNN
+    WeaveModel, Prot2Vec, ProteinRNN, ProteinCNN, ProteinCNN2D, GraphNeuralNet2D
 from jova.utils import Trainer, io
 from jova.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
 from jova.utils.math import ExpAverage, Count
@@ -55,13 +55,13 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(3)
 
 use_ecfp8 = True
 use_weave = False
 use_gconv = True
 use_prot = True
-use_gnn = True
+use_gnn = False
 
 
 def create_ecfp_net(hparams):
@@ -69,23 +69,50 @@ def create_ecfp_net(hparams):
     return model
 
 
-def create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models_hook=None):
-    assert protein_profile is not None, "Protein profile has to be supplied"
-    assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
+def create_prot_net(hparams, model_type, protein_profile, protein_embeddings, frozen_models_hook=None):
+    # assert protein_profile is not None, "Protein profile has to be supplied"
+    # assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
 
-    if hparams["prot"]["model_type"].lower() == "rnn":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+    # model_type = hparams["prot"]["model_type"].lower()
+    valid_opts = ["rnn", "psc", "p2v", "pcnn", "pcnn2d"]
+    assert (model_type in valid_opts), "Valid protein types: {}".format(str(valid_opts))
+    if model_type == "rnn":
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
-                                       embeddings=pt_embeddings,
+                                       vocab_size=hparams["prot"]["vocab_size"],
+                                       embedding_dim=hparams["prot"]["embedding_dim"],
                                        batch_first=False),
-                              ProteinRNN(in_dim=hparams["prot"]["dim"] * hparams["prot"]["window"],
+                              ProteinRNN(in_dim=hparams["prot"]["embedding_dim"] * hparams["prot"]["window"],
                                          hidden_dim=hparams["prot"]["rnn_hidden_state_dim"],
                                          dropout=hparams["dprob"],
                                          batch_first=False))
-    elif hparams["prot"]["model_type"].lower() == "p2v":
-        pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
-        model = Prot2Vec(protein_profile=protein_profile, embeddings=pt_embeddings, batch_first=True)
-    else:
+    elif model_type == "p2v":
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = Prot2Vec(protein_profile=protein_profile,
+                         vocab_size=hparams["prot"]["vocab_size"],
+                         embedding_dim=hparams["prot"]["embedding_dim"],
+                         batch_first=False)
+    elif model_type == "pcnn":
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
+                                       vocab_size=hparams["prot"]["vocab_size"],
+                                       embedding_dim=hparams["prot"]["embedding_dim"],
+                                       batch_first=False),
+                              ProteinCNN(dim=hparams["prot"]["embedding_dim"],
+                                         window=hparams["prot"]["window"],
+                                         activation="relu",
+                                         pooling_dim=0,
+                                         num_layers=hparams["prot"]["pcnn_num_layers"]))
+    elif model_type == "pcnn2d":
+        # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
+        model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
+                                       vocab_size=hparams["prot"]["vocab_size"],
+                                       embedding_dim=hparams["prot"]["embedding_dim"],
+                                       batch_first=False),
+                              ProteinCNN2D(dim=hparams["prot"]["embedding_dim"],
+                                           window=hparams["prot"]["window"],
+                                           num_layers=hparams["prot"]["pcnn_num_layers"]))
+    elif model_type == "psc":
         model = nn.Sequential(Unsqueeze(dim=0))
     return model
 
@@ -148,27 +175,52 @@ def create_gconv_net(hparams):
     return model
 
 
+def create_gnn_net(hparams):
+    dim = hparams["gnn"]["dim"]
+    gnn_model = GraphNeuralNet2D(num_fingerprints=hparams["gnn"]["fingerprint_size"], embedding_dim=dim,
+                                 num_layers=hparams["gnn"]["num_layers"])
+    return nn.Sequential(gnn_model,
+                         nn.Linear(dim, dim),
+                         ElementwiseBatchNorm(dim),
+                         nn.ReLU(),
+                         nn.Dropout(hparams["dprob"]))
+
+
 def create_integrated_net(hparams, protein_profile, protein_embeddings):
     # Convenient way of keeping track of models to be frozen during (or at the initial stages) training.
     frozen_models = FrozenModels()
 
     # N-way forward propagation
     views = {}
+    seg_dims = []
 
+    # compound models
     if use_ecfp8:
         views["ecfp8"] = create_ecfp_net(hparams)
+        seg_dims.append(hparams["ecfp8"]["dim"])
     if use_weave:
         views["weave"] = create_weave_net(hparams)
+        seg_dims.append(hparams["weave"]["dim"])
     if use_gconv:
         views["gconv"] = create_gconv_net(hparams)
-    if use_prot:
-        views["prot"] = create_prot_net(hparams, protein_profile, protein_embeddings, frozen_models)
+        seg_dims.append(hparams["gconv"]["dim"])
+    if use_gnn:
+        views["gnn"] = create_gnn_net(hparams)
+        seg_dims.append(hparams["gnn"]["dim"])
+
+    # protein models
+    for m_type in hparams["prot"]["model_types"]:
+        views[m_type] = create_prot_net(hparams, m_type, protein_profile, protein_embeddings, frozen_models)
+        if m_type == "psc":
+            seg_dims.append(hparams["prot"]["psc_dim"])
+        elif m_type == "rnn":
+            seg_dims.append(hparams["prot"]["rnn_hidden_state_dim"])
+        elif m_type == "p2v":
+            seg_dims.append(hparams["prot"]["embedding_dim"] * hparams["prot"]["window"])
+        elif m_type in ["pcnn", "pcnn2d"]:
+            seg_dims.append(hparams["prot"]["embedding_dim"])
 
     layers = [NwayForward(models=views.values())]
-
-    seg_dims = [hparams[c]["dim"] for c in list(views.keys())[:-1]]
-    seg_dims.append(
-        hparams["prot"]["rnn_hidden_state_dim"] if hparams["prot"]["model_type"] == "rnn" else hparams["prot"]["dim"])
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
@@ -222,13 +274,13 @@ class IntegratedViewDTI(Trainer):
         print("Number of trainable parameters: generator={}, discriminator={}".format(count_parameters(generator),
                                                                                       count_parameters(discriminator)))
 
-        # try:
-        if cuda:
-            generator = generator.cuda()
-            discriminator = discriminator.cuda()
-        # except:  # todo: Remove this after hyperparameter search
-        #     generator = nn.Sequential(nn.Linear(10, 10))
-        #     discriminator = nn.Sequential(nn.Linear(10, 10))
+        try:
+            if cuda:
+                generator = generator.cuda()
+                discriminator = discriminator.cuda()
+        except:  # todo: Remove this try-catch after hyperparameter search
+            generator = nn.Sequential(nn.Linear(10, 10))
+            discriminator = nn.Sequential(nn.Linear(10, 10))
 
         # data loaders
         train_data_loader = DataLoader(dataset=train_dataset,
@@ -283,7 +335,7 @@ class IntegratedViewDTI(Trainer):
         return (generator, discriminator), (optimizer_gen, optimizer_disc), \
                {"train": train_data_loader,
                 "val": val_data_loader,
-                "test": test_data_loader}, metrics, hparams["prot"]["model_type"], \
+                "test": test_data_loader}, metrics, hparams["prot"]["model_types"], \
                hparams["weighted_loss"], hparams["neigh_dist"], frozen_models
 
     @staticmethod
@@ -324,7 +376,7 @@ class IntegratedViewDTI(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, models, optimizers, data_loaders, metrics, prot_model_type, weighted_loss, neigh_dist,
+    def train(eval_fn, models, optimizers, data_loaders, metrics, prot_model_types, weighted_loss, neigh_dist,
               frozen_models, transformers_dict, prot_desc_dict, tasks, n_iters=5000, sim_data_node=None,
               epoch_ckpt=(2, 1.0), tb_writer=None):
         generator, discriminator = models
@@ -397,8 +449,9 @@ class IntegratedViewDTI(Trainer):
                             for batch in tqdm(data_loaders[phase]):
                                 batch_size, data = batch_collator(batch, prot_desc_dict, spec={"ecfp8": use_ecfp8,
                                                                                                "weave": use_weave,
-                                                                                               "gconv": use_gconv},
-                                                                  cuda_prot=prot_model_type == "psc")
+                                                                                               "gconv": use_gconv,
+                                                                                               "gnn": use_gnn},
+                                                                  cuda_prot=True)
                                 # organize the data for each view.
                                 Xs = {}
                                 Ys = {}
@@ -426,10 +479,15 @@ class IntegratedViewDTI(Trainer):
 
                                     y = Ys[list(Xs.keys())[0]]
                                     w = Ws[list(Xs.keys())[0]]
-                                    if prot_model_type == "p2v" or prot_model_type == "rnn":
-                                        protein_x = Xs[list(Xs.keys())[0]][2]
-                                    else:
-                                        protein_x = Xs[list(Xs.keys())[0]][1]
+
+                                    # protein data in batch
+                                    protein_xs = []
+                                    for m_type in prot_model_types:
+                                        if m_type in ["p2v", "rnn", "pcnn", "pcnn2d"]:
+                                            protein_xs.append(Xs[list(Xs.keys())[0]][2])
+                                        elif m_type == "psc":
+                                            protein_xs.append(Xs[list(Xs.keys())[0]][1])
+
                                     X = []
                                     if use_ecfp8:
                                         X.append(Xs["ecfp8"][0])
@@ -437,8 +495,11 @@ class IntegratedViewDTI(Trainer):
                                         X.append(Xs["weave"][0])
                                     if use_gconv:
                                         X.append(Xs["gconv"][0])
-                                    if use_prot:
-                                        X.append(protein_x)
+                                    if use_gnn:
+                                        X.append(Xs["gnn"][0])
+
+                                    # merge compound and protein list
+                                    X = X + protein_xs
 
                                     outputs = generator(X)
                                     target = torch.from_numpy(y).float()
@@ -544,7 +605,7 @@ class IntegratedViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(generator.state_dict())
                             best_epoch = epoch
-        except Exception as e:
+        except ValueError as e:
             print(str(e))
 
         duration = time.time() - start
@@ -648,8 +709,18 @@ class IntegratedViewDTI(Trainer):
 
 
 def main(flags):
-    flags["prot_model_type"] = "psc"
-    sim_label = "integrated_view_gan_attn_" + flags["prot_model_type"]
+    comp_lbl = []
+    if use_ecfp8:
+        comp_lbl.append("ecfp8")
+    if use_weave:
+        comp_lbl.append("weave")
+    if use_gconv:
+        comp_lbl.append("gconv")
+    if use_gnn:
+        comp_lbl.append("gnn")
+    comp_lbl = '_'.join(comp_lbl)
+    flags["prot_model_types"] = ["psc"]
+    sim_label = "integrated_view_attn_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
     print("CUDA={}, view={}".format(cuda, sim_label))
 
     # Simulation data resource tree
@@ -667,18 +738,20 @@ def main(flags):
 
     # Runtime Protein stuff
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
-    prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
-    pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
+    prot_profile = load_pickle(file_name=flags.prot_profile)
+    prot_vocab = load_pickle(file_name=flags.prot_vocab)
+    pretrained_embeddings = None  # load_numpy_array(flags.protein_embeddings)
     flags["prot_vocab_size"] = len(prot_vocab)
-    flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
+    # flags["embeddings_dim"] =  pretrained_embeddings.shape[-1]
+    # flags["window"] = 11  # window for grouping n-grams of amino acid
 
     # For searching over multiple seeds
     hparam_search = None
 
     for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_sim_runs/{}_{}_{}/".format(sim_label, seed,
-                                                                                              dt.now().strftime(
-                                                                                                  "%Y_%m_%d__%H_%M_%S")))
+        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
+                                                                                          dt.now().strftime(
+                                                                                              "%Y_%m_%d__%H_%M_%S")))
 
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -716,8 +789,10 @@ def main(flags):
         flags["tasks"] = tasks
 
         # Fingerprint dict for GNN if available
-        if flags.fingerprint is not None:
-            flags["gnn_fingerprint"] = load_pickle(file_name=flags.fingerprint)
+        if use_gnn and flags.gnnet_fingerprint is not None:
+            flags["gnn_fingerprint"] = load_pickle(file_name=flags.gnnet_fingerprint)
+        else:
+            flags["gnn_fingerprint"] = None
 
         trainer = IntegratedViewDTI()
 
@@ -742,10 +817,11 @@ def main(flags):
                                    "protein_embeddings": pretrained_embeddings}
                 extra_data_args = {"flags": flags,
                                    "data_dict": data_dict}
+                total_iterations = 4000
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
-                                    "n_iters": 4000,
+                                    "n_iters": total_iterations,
                                     "tb_writer": summary_writer_creator}
 
                 hparams_conf = get_hparam_config(flags)
@@ -769,8 +845,9 @@ def main(flags):
                                                sim_label=sim_label,
                                                minimizer=min_opt,
                                                dataset_label=dataset_lbl,
-                                               results_file="{}_{}_dti_{}_{}.csv".format(
-                                                   flags["hparam_search_alg"], sim_label, date_label, min_opt))
+                                               results_file="{}_{}_dti_{}_{}-{}.csv".format(
+                                                   flags["hparam_search_alg"], sim_label, date_label,
+                                                   total_iterations, min_opt))
 
                 stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
                 print(stats)
@@ -804,7 +881,7 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
                transformers_dict, view, protein_profile, protein_embeddings, k=None, tb_writer=None):
     data = trainer.data_provider(k, flags, data_dict)
-    model, optimizer, data_loaders, metrics, prot_model_type, weighted_loss, \
+    model, optimizer, data_loaders, metrics, prot_model_types, weighted_loss, \
     neigh_dist, frozen_models = trainer.initialize(hparams=hyper_params,
                                                    train_dataset=data["train"],
                                                    val_dataset=data["val"],
@@ -817,7 +894,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                prot_desc_dict, tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_type,
+        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_types,
                                             weighted_loss, neigh_dist, frozen_models, transformers_dict, prot_desc_dict,
                                             tasks, n_iters=10000, sim_data_node=sim_data_node, tb_writer=tb_writer)
         # Save the model.
@@ -911,14 +988,14 @@ def default_hparams_bopt(flags):
         "optimizer_disc": "sgd",
         "optimizer_disc__global__weight_decay": 1.0,
         "optimizer_disc__global__lr": 0.0001,
-
         "prot": {
-            "model_type": flags["prot_model_type"],
-            "in_dim": 8421,
-            "dim": 8421 if flags["prot_model_type"] == "psc" else flags["embeddings_dim"],
+            "model_types": flags["prot_model_types"],
             "vocab_size": flags["prot_vocab_size"],
             "window": 11,
-            "rnn_hidden_state_dim": 100
+            "pcnn_num_layers": 2,
+            "embedding_dim": 10,
+            "psc_dim": 8421,
+            "rnn_hidden_state_dim": 10
         },
         "weave": {
             "dim": 50,
@@ -931,7 +1008,7 @@ def default_hparams_bopt(flags):
             "dim": 1024,
         },
         "gnn": {
-            "fingerprint_size": len(flags["gnn_fingerprint"]),
+            "fingerprint_size": len(flags["gnn_fingerprint"]) if use_gnn else 0,
             "num_layers": 3,
             "dim": 100,
         }
@@ -939,13 +1016,12 @@ def default_hparams_bopt(flags):
 
 
 def get_hparam_config(flags):
-    # prot_model = "psc"
     return {
-        "prot_vocab_size": ConstantParam(flags["prot_vocab_size"]),
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
         "attn_layers": DiscreteParam(min=1, max=2),
         "lin_dims": DiscreteParam(min=64, max=1048, size=DiscreteParam(min=1, max=2)),
         "latent_dim": ConstantParam(256),
+        "output_dim": ConstantParam(len(flags.tasks)),
         "disc_hdims": DiscreteParam(min=100, max=1048, size=DiscreteParam(min=1, max=2)),
 
         # weight initialization
@@ -970,15 +1046,16 @@ def get_hparam_config(flags):
         "optimizer_disc__global__lr": LogRealParam(),
 
         "prot": DictParam({
-            "model_type": ConstantParam(flags["prot_model_type"]),
-            "in_dim": ConstantParam(8421),
-            "dim": ConstantParam(8421 if flags["prot_model_type"] == "psc" else flags["embeddings_dim"]),
+            "model_types": ConstantParam(flags["prot_model_types"]),
             "vocab_size": ConstantParam(flags["prot_vocab_size"]),
-            "window": ConstantParam(32),
-            "rnn_hidden_state_dim": DiscreteParam(min=50, max=512)
+            "window": ConstantParam(11),
+            # "pcnn_num_layers": DiscreteParam(min=1, max=4),
+            # "embedding_dim": DiscreteParam(min=5, max=50),
+            "psc_dim": ConstantParam(8421),
+            # "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
         }),
-        "weave": DictParam({
-            # "dim": DiscreteParam(min=64, max=512),
+        "weave": ConstantParam({
+            "dim": DiscreteParam(min=64, max=512),
             "update_pairs": ConstantParam(False),
         }),
         "gconv": DictParam({
@@ -986,6 +1063,11 @@ def get_hparam_config(flags):
         }),
         "ecfp8": DictParam({
             "dim": ConstantParam(1024),
+        }),
+        "gnn": ConstantParam({
+            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"]) if use_gnn else 0),
+            "num_layers": DiscreteParam(1, 4),
+            "dim": DiscreteParam(min=64, max=512),
         })
     }
 
@@ -1119,7 +1201,7 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--fingerprint",
+    parser.add_argument("--gnnet_fingerprint",
                         default=None,
                         type=str,
                         help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
