@@ -197,6 +197,7 @@ def process_ecfp_view_data(X, prot_desc_dict, idx, cuda_prot):
     """
     mols_tensor = prots_tensor = None
     prot_names = None
+    x_data = None
     if X is not None:
         x_data = X[:, 0, idx]
         mols = [pair[0] for pair in x_data]
@@ -207,7 +208,8 @@ def process_ecfp_view_data(X, prot_desc_dict, idx, cuda_prot):
         prot_desc = np.array(prot_desc)
         prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
         prots_tensor = torch.from_numpy(prot_desc)
-    return cuda(mols_tensor.float()), cuda(prots_tensor.float()) if cuda_prot else prots_tensor.float(), prot_names
+    return cuda(mols_tensor.float()), cuda(
+        prots_tensor.float()) if cuda_prot else prots_tensor.float(), prot_names, x_data
 
 
 def process_weave_view_data(X, prot_desc_dict, idx, cuda_prot):
@@ -264,7 +266,7 @@ def process_weave_view_data(X, prot_desc_dict, idx, cuda_prot):
         cuda(torch.tensor(np.array(atom_split), dtype=torch.int)),
         n_atoms_list
     ]
-    return mol_data, cuda(prots_tensor.float()) if cuda_prot else prots_tensor.float(), prot_names
+    return mol_data, cuda(prots_tensor.float()) if cuda_prot else prots_tensor.float(), prot_names, x_data
 
 
 def process_gconv_view_data(X, prot_desc_dict, idx, cuda_prot):
@@ -301,7 +303,7 @@ def process_gconv_view_data(X, prot_desc_dict, idx, cuda_prot):
     prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
     prots_tensor = cuda(torch.from_numpy(prot_desc)) if cuda_prot else torch.from_numpy(prot_desc)
 
-    return mol_data, prots_tensor.float(), prot_names
+    return mol_data, prots_tensor.float(), prot_names, x_data
 
 
 def process_gnn_view_data(X, prot_desc_dict, idx, cuda_prot):
@@ -330,7 +332,7 @@ def process_gnn_view_data(X, prot_desc_dict, idx, cuda_prot):
     prot_desc = np.array(prot_desc)
     prot_desc = prot_desc.reshape(prot_desc.shape[0], prot_desc.shape[2])
     prots_tensor = cuda(torch.from_numpy(prot_desc)) if cuda_prot else torch.from_numpy(prot_desc)
-    return mol_data, prots_tensor.float(), prot_names
+    return mol_data, prots_tensor.float(), prot_names, x_data
 
 
 # def pad(matrices, pad_value=0):

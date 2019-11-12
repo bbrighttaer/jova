@@ -703,8 +703,9 @@ class Prot2Vec(nn.Module):
 
     def forward(self, input):
         # get the embedding indices for this batch
-        x = _construct_embedding_indices(input, self.protein_profile, self.embedding.weight.device,
-                                         self.embedding.weight.shape[0] - 1)
+        fill_val = self.embedding.weight.shape[0] - 1
+        x = _construct_embedding_indices(input, self.protein_profile, self.embedding.weight.device, fill_val)
+
         # get protein embedding
         embedding = self.embedding(x)
         embedding = embedding.reshape(*embedding.shape[:2], -1)
@@ -883,8 +884,11 @@ class TwoWayAttention(nn.Module):
 class JointAttention(nn.Module):
 
     def __init__(self, d_dims, latent_dim=256, num_heads=1, num_layers=1, dprob=0., activation='relu',
-                 inner_layer_dim=2048):
+                 inner_layer_dim=2048, attn_hook=None):
         super(JointAttention, self).__init__()
+        if attn_hook:
+            assert callable(attn_hook), "Attention hook must be a function"
+        self.attn_hook = attn_hook
         self.latent_dim = latent_dim
         self.lin_prjs = nn.ModuleList([nn.Linear(in_dim, latent_dim) for in_dim in d_dims])
         self.attention_models = nn.ModuleList([nn.MultiheadAttention(embed_dim=self.latent_dim,
@@ -928,18 +932,21 @@ class JointAttention(nn.Module):
         shape = x.shape
 
         # self-attention
-        wts_lst = []
-        for attn_net, res_net in zip(self.attention_models, self.res_blks):
+        for i, (attn_net, res_net) in enumerate(zip(self.attention_models, self.res_blks)):
             # self-attention - sub-module 1
             x_prime, wts = attn_net(x, x, x)
+
+            # call any registered hook
+            if self.attn_hook:
+                self.attn_hook(i, x, x_prime, wts, num_segs)
+
+            # residual connection (segment-wise)
             x_add = x + x_prime
             x = self.attn_bn(x_add.view(shape[0] * shape[1], shape[2]))
             x = x.view(*shape)
 
             # FFN res block - sub-module 2
             x = res_net(x)
-
-            wts_lst.append(wts)
 
         # compute view representations
         xs = torch.split(x, num_segs, 0)

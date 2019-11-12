@@ -49,13 +49,13 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filen
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1, 8, 64]
-
+# seeds = [1, 8, 64]
+seeds = [8, 16, 32]
 # seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(3)
+torch.cuda.set_device(0)
 
 use_ecfp8 = True
 use_weave = False
@@ -405,8 +405,10 @@ class IntegratedViewDTI(Trainer):
         train_loss_node = DataNode(label="training_loss", data=loss_lst)
         metrics_dict = {}
         metrics_node = DataNode(label="validation_metrics", data=metrics_dict)
-        scores_lst = []
-        scores_node = DataNode(label="validation_score", data=scores_lst)
+        val_scores_lst = []
+        val_scores_node = DataNode(label="validation_score", data=val_scores_lst)
+        train_scores_lst = []
+        train_scores_node = DataNode(label="train_score", data=train_scores_lst)
         gen_loss_lst = []
         gen_loss_node = DataNode(label="generator_loss", data=gen_loss_lst)
         dis_loss_lst = []
@@ -414,7 +416,8 @@ class IntegratedViewDTI(Trainer):
 
         # add sim data nodes to parent node
         if sim_data_node:
-            sim_data_node.data = [train_loss_node, metrics_node, scores_node, gen_loss_node, dis_loss_node]
+            sim_data_node.data = [train_loss_node, train_scores_node, metrics_node, val_scores_node, gen_loss_node,
+                                  dis_loss_node]
 
         try:
             # Main training loop
@@ -555,6 +558,13 @@ class IntegratedViewDTI(Trainer):
                                     print("\tEpoch={}/{}, batch={}/{}, pred_loss={:.4f}, D loss={:.4f}, "
                                           "G loss={:.4f}".format(epoch + 1, n_epochs, i + 1, len(data_loaders[phase]),
                                                                  pred_loss.item(), discriminator_loss, gen_loss))
+
+                                    # monitor train data score
+                                    eval_dict = {}
+                                    score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
+                                                    transformers_dict[list(Xs.keys())[0]])
+                                    train_scores_lst.append(score)
+                                    tracker.track("train/score", score, tb_idx.i)
                                 else:
                                     if str(pred_loss.item()) != "nan":  # useful in hyperparameter search
                                         tracker.track("val/val_pred_loss", pred_loss.item(), tb_idx.i)
@@ -571,7 +581,7 @@ class IntegratedViewDTI(Trainer):
                                         epoch_scores.append(score)
 
                                         # for sim data resource
-                                        scores_lst.append(score)
+                                        val_scores_lst.append(score)
                                         for m in eval_dict:
                                             if m in metrics_dict:
                                                 metrics_dict[m].append(eval_dict[m])
@@ -605,7 +615,7 @@ class IntegratedViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(generator.state_dict())
                             best_epoch = epoch
-        except ValueError as e:
+        except RuntimeError as e:
             print(str(e))
 
         duration = time.time() - start
@@ -719,7 +729,7 @@ def main(flags):
     if use_gnn:
         comp_lbl.append("gnn")
     comp_lbl = '_'.join(comp_lbl)
-    flags["prot_model_types"] = ["psc"]
+    flags["prot_model_types"] = ["psc", "rnn"]
     sim_label = "integrated_view_attn_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
     print("CUDA={}, view={}".format(cuda, sim_label))
 
@@ -749,9 +759,9 @@ def main(flags):
     hparam_search = None
 
     for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
-                                                                                          dt.now().strftime(
-                                                                                              "%Y_%m_%d__%H_%M_%S")))
+        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs_gan/{}_{}_{}/".format(sim_label, seed,
+                                                                                              dt.now().strftime(
+                                                                                                  "%Y_%m_%d__%H_%M_%S")))
 
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -817,7 +827,7 @@ def main(flags):
                                    "protein_embeddings": pretrained_embeddings}
                 extra_data_args = {"flags": flags,
                                    "data_dict": data_dict}
-                total_iterations = 4000
+                total_iterations = 3000
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
@@ -1022,7 +1032,7 @@ def get_hparam_config(flags):
         "lin_dims": DiscreteParam(min=64, max=1048, size=DiscreteParam(min=1, max=2)),
         "latent_dim": ConstantParam(256),
         "output_dim": ConstantParam(len(flags.tasks)),
-        "disc_hdims": DiscreteParam(min=100, max=1048, size=DiscreteParam(min=1, max=2)),
+        "disc_hdims": DiscreteParam(min=100, max=1048, size=2),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
@@ -1050,9 +1060,9 @@ def get_hparam_config(flags):
             "vocab_size": ConstantParam(flags["prot_vocab_size"]),
             "window": ConstantParam(11),
             # "pcnn_num_layers": DiscreteParam(min=1, max=4),
-            # "embedding_dim": DiscreteParam(min=5, max=50),
+            "embedding_dim": DiscreteParam(min=5, max=50),
             "psc_dim": ConstantParam(8421),
-            # "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
+            "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
         }),
         "weave": ConstantParam({
             "dim": DiscreteParam(min=64, max=512),

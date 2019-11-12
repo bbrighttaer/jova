@@ -38,6 +38,7 @@ from jova.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAt
     GraphNeuralNet2D, ProteinCNN2D, ProteinCNN
 from jova.utils import Trainer, io
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.attn_helpers import MultimodalAttentionData
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
 from jova.utils.sim_data import DataNode
@@ -53,13 +54,15 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 use_ecfp8 = True
-use_weave = True
-use_gconv = False
+use_weave = False
+use_gconv = True
 use_prot = True
 use_gnn = False
+
+joint_attention_data = MultimodalAttentionData()
 
 
 def create_ecfp_net(hparams):
@@ -196,15 +199,19 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
     if use_ecfp8:
         views["ecfp8"] = create_ecfp_net(hparams)
         seg_dims.append(hparams["ecfp8"]["dim"])
+        joint_attention_data.labels.append("ecfp8")
     if use_weave:
         views["weave"] = create_weave_net(hparams)
         seg_dims.append(hparams["weave"]["dim"])
+        joint_attention_data.labels.append("weave")
     if use_gconv:
         views["gconv"] = create_gconv_net(hparams)
         seg_dims.append(hparams["gconv"]["dim"])
+        joint_attention_data.labels.append("gconv")
     if use_gnn:
         views["gnn"] = create_gnn_net(hparams)
         seg_dims.append(hparams["gnn"]["dim"])
+        joint_attention_data.labels.append("gnn")
 
     # protein models
     for m_type in hparams["prot"]["model_types"]:
@@ -218,10 +225,14 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
         elif m_type in ["pcnn", "pcnn2d"]:
             seg_dims.append(hparams["prot"]["embedding_dim"])
 
+        # register the view of the protein for recording attention info
+        joint_attention_data.labels.append(m_type)
+
     layers = [NwayForward(models=views.values())]
 
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
-                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"]))
+                                 num_layers=hparams["attn_layers"], dprob=hparams["dprob"],
+                                 attn_hook=joint_attention_data.joint_attn_forward_hook))
 
     p = len(views) * hparams["latent_dim"]
     for dim in hparams["lin_dims"]:
@@ -359,6 +370,8 @@ class IntegratedViewDTI(Trainer):
         train_loss_node = DataNode(label="training_loss", data=loss_lst)
         metrics_dict = {}
         metrics_node = DataNode(label="validation_metrics", data=metrics_dict)
+        train_scores_lst = []
+        train_scores_node = DataNode(label="train_score", data=train_scores_lst)
         scores_lst = []
         scores_node = DataNode(label="validation_score", data=scores_lst)
         loss_lst = []
@@ -366,7 +379,7 @@ class IntegratedViewDTI(Trainer):
 
         # add sim data nodes to parent node
         if sim_data_node:
-            sim_data_node.data = [train_loss_node, metrics_node, scores_node, loss_node]
+            sim_data_node.data = [train_loss_node, train_scores_node, metrics_node, scores_node, loss_node]
 
         try:
             # Main training loop
@@ -405,6 +418,10 @@ class IntegratedViewDTI(Trainer):
                                                                                                "gconv": use_gconv,
                                                                                                "gnn": use_gnn},
                                                                   cuda_prot=True)
+
+                                # attention x data for analysis
+                                attn_data_x = {}
+
                                 # organize the data for each view.
                                 Xs = {}
                                 Ys = {}
@@ -418,6 +435,7 @@ class IntegratedViewDTI(Trainer):
                                         Xs[view_name] = view_data[0]
                                     Ys[view_name] = np.array([k for k in view_data[1]], dtype=np.float)
                                     Ws[view_name] = np.array([k for k in view_data[2]], dtype=np.float)
+                                    attn_data_x[view_name] = view_data[0][3]
 
                                 optimizer.zero_grad()
 
@@ -439,6 +457,7 @@ class IntegratedViewDTI(Trainer):
                                             protein_xs.append(Xs[list(Xs.keys())[0]][2])
                                         elif m_type == "psc":
                                             protein_xs.append(Xs[list(Xs.keys())[0]][1])
+                                        attn_data_x[m_type] = Xs[list(Xs.keys())[0]][2]
 
                                     # compound data in batch
                                     X = []
@@ -454,7 +473,13 @@ class IntegratedViewDTI(Trainer):
                                     # merge compound and protein list
                                     X = X + protein_xs
 
+                                    # register corresponding joint attention data before forward pass
+                                    joint_attention_data.register_data(attn_data_x)
+
+                                    # forward pass
                                     outputs = model(X)
+
+                                    # compute loss
                                     target = torch.from_numpy(y).float()
                                     weights = torch.from_numpy(w).float()
                                     if cuda:
@@ -480,6 +505,13 @@ class IntegratedViewDTI(Trainer):
                                         epoch + 1, n_epochs,
                                         i + 1,
                                         len(data_loaders[phase]), loss.item()))
+
+                                    # monitor train data score
+                                    eval_dict = {}
+                                    score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
+                                                    transformers_dict[list(Xs.keys())[0]])
+                                    train_scores_lst.append(score)
+                                    tracker.track("train/score", score, tb_idx.i)
                                 else:
                                     if str(loss.item()) != "nan":  # useful in hyperparameter search
                                         tracker.track("val/val_pred_loss", loss.item(), tb_idx.i)
@@ -528,7 +560,7 @@ class IntegratedViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except ValueError as e:
+        except RuntimeError as e:
             print(str(e))
 
         duration = time.time() - start
@@ -642,7 +674,7 @@ def main(flags):
     if use_gnn:
         comp_lbl.append("gnn")
     comp_lbl = '_'.join(comp_lbl)
-    flags["prot_model_types"] = ["psc"]
+    flags["prot_model_types"] = ["psc", "rnn"]
     sim_label = "integrated_view_attn_no_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
     print("CUDA={}, view={}".format(cuda, sim_label))
 
