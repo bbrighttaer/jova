@@ -61,13 +61,13 @@ def save_model(model, path, name):
     :return:
     """
     os.makedirs(path, exist_ok=True)
-    # file = os.path.join(path, name + ".mod")
-    # torch.save(model.state_dict(), file)
-    with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
-        f.write(name + '\n')
+    file = os.path.join(path, name + ".mod")
+    torch.save(model.state_dict(), file)
+    # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
+    #     f.write(name + '\n')
 
 
-def load_model(path, name):
+def load_model(path, name, dvc=torch.device("cuda:0")):
     """
     Loads the parameters of a model.
 
@@ -75,7 +75,7 @@ def load_model(path, name):
     :param name:
     :return: The saved state_dict.
     """
-    return torch.load(os.path.join(path, name), map_location=torch.device("cuda:0"))
+    return torch.load(os.path.join(path, name), map_location=dvc)
 
 
 def load_pickle(file_name):

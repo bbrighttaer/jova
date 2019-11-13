@@ -223,9 +223,9 @@ class WeaveGather2D(WeaveGather):
             outputs = self.linear(outputs)
             outputs = self.activation(outputs) if self.activation else outputs
         # outputs = _group_atoms(outputs, n_atoms_lst)
-        max_dim = max(n_atoms_lst)
+        max_seg = max(n_atoms_lst)
         mols = outputs.split(n_atoms_lst)
-        mols = [F.pad(m, (0, 0, 0, max_dim - m.shape[0])) for m in mols]
+        mols = [F.pad(m, (0, 0, 0, max_seg - m.shape[0])) for m in mols]
         outputs = torch.stack(mols, dim=1)
         if self._batch_first:
             outputs = outputs.permute(1, 0, 2)
@@ -426,9 +426,9 @@ class GraphGather2D(GraphGather):
 
     def forward(self, input_data, batch_size):
         atom_features, membership, n_atoms_lst = input_data[0], input_data[2], input_data[3]
-        max_dim = max(n_atoms_lst)
+        max_seg = max(n_atoms_lst)
         mols = atom_features.split(n_atoms_lst)
-        mols = [F.pad(m, (0, 0, 0, max_dim - m.shape[0])) for m in mols]
+        mols = [F.pad(m, (0, 0, 0, max_seg - m.shape[0])) for m in mols]
         outputs = torch.stack(mols, dim=1)
         if self.activation:
             mol_features = self.activation(outputs) if self.activation else outputs

@@ -912,15 +912,6 @@ class JointAttention(nn.Module):
         return padded
 
     def forward(self, inputs):
-        """
-                Applies a Direction-Invariant N-way Attention to the given contexts.
-
-                :param contexts: tuple
-                    The N contexts for computing the attention vectors.
-                    Each element's shape must be (number of segments, batch size, model dimension)
-                :return: tuple
-                    attention vectors.
-                """
         # Gets number of segments in each view
         num_segs = [x.shape[0] for x in inputs]
 
