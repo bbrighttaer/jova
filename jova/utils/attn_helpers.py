@@ -19,10 +19,11 @@ import torch.nn.functional as F
 
 
 class UnimodalAttentionData(object):
-    def __init__(self, view_lbl, view_x, prot_profile, prot_vocab, layer_num, x, x_prime, wts):
+    def __init__(self, view_lbl, view_x, prot_seqs, prot_profile, prot_vocab, layer_num, x, x_prime, wts):
         self.view_lbl = view_lbl
         self._unk = '<UNK>'
         self.prot_profile = prot_profile
+        self.prot_seqs = prot_seqs
         self.prot_vocab = prot_vocab
         self.prot_vocab_flipped = {k: v for k, v in zip(prot_vocab.values(), prot_vocab.keys())}
         self.prot_vocab_flipped[len(prot_vocab)] = self._unk  # for padded regions
@@ -47,14 +48,18 @@ class UnimodalAttentionData(object):
             smiles_lst.append(mol.smiles)
             mol = Chem.MolFromSmiles(mol.smiles)
             n_atoms_lst.append(mol.GetNumAtoms())
-            compounds.append([atom.GetSymbol() for atom in mol.GetAtoms()])
+            compounds.append([(atom.GetSymbol(), atom.GetIdx()) for atom in mol.GetAtoms()])
         max_seg = max(n_atoms_lst)
         compounds = [atoms + [self._unk] * (max_seg - len(atoms)) for atoms in compounds]
         compounds = np.array(compounds, dtype=np.object)
-        assert (compounds.transpose().shape == self.x.shape[:2])
+        # assert (compounds.transpose().shape == self.x.shape[:2])
         assert len(indices) == len(compounds) == len(smiles_lst)
-        sel = [(smiles, comp[idx]) for idx, comp, smiles in zip(indices, compounds, smiles_lst)]
-        return self.view_lbl, sel
+
+        res_dict = {'view': self.view_lbl, 'predictions': {}}
+        for i, (idx, comp, smiles) in enumerate(zip(indices, compounds, smiles_lst)):
+            samp_dict = {'entity': smiles, 'rankings': comp[idx].tolist()}
+            res_dict['predictions']['sample_%d' % i] = samp_dict
+        return res_dict
 
     def _protein_segments_ranking(self, k):
         indices = self._get_x_prime_top_k(k).t().long()  # structure is [batch, num_seg]
@@ -66,17 +71,17 @@ class UnimodalAttentionData(object):
         # pad sequences for batch processing
         x = [F.pad(tensor, (0, 0, 0, max_seq - tensor.shape[0]), value=len(self.prot_vocab)) for tensor in x]
         x = torch.stack(x, dim=0).long()  # structure as [batch, num_seg, dim]
-        assert (x.permute(1, 0, 2).shape[:2] == self.x.shape[:2])
+        # assert (x.permute(1, 0, 2).shape[:2] == self.x.shape[:2])
 
-        batch_sequences = []
+        res_dict = {'view': self.view_lbl, 'predictions': {}}
         assert len(indices) == len(x) == len(self.raw_x)
-        for idx, sample, prot in zip(indices, x, self.raw_x):
+        for i, (idx, sample, prot) in enumerate(zip(indices, x, self.raw_x)):
             sample_seqs = []
-            sel = sample[idx]
-            for sel_seg in sel:
+            for sel_seg in sample[idx]:
                 sample_seqs.append([self.prot_vocab_flipped[int(id)] for id in sel_seg])
-            batch_sequences.append((prot, sample_seqs))
-        return self.view_lbl, batch_sequences
+            samp_dict = {'entity': prot, 'sequence': self.prot_seqs[prot][1], 'rankings': sample_seqs}
+            res_dict['predictions']['sample_%d' % i] = samp_dict
+        return res_dict
 
     def rank_segments(self, k=10):
         """
@@ -84,7 +89,7 @@ class UnimodalAttentionData(object):
         :return:
         """
         # no ranking cannot be done for views with one segment (e.g. ecfp)
-        if self.x.squeeze().dim() == 3:
+        if self.x.dim() == 3:
             if self.view_lbl in ['gconv', 'gnn', 'weave']:
                 return self._compound_segments_ranking(k)
             elif self.view_lbl in ['p2v', 'rnn', 'pcnn']:
@@ -99,6 +104,7 @@ class MultimodalAttentionData(object):
         self._registry = []
         self._protein_profile = None
         self._protein_vocab = None
+        self._prot_sequences = None
 
     @property
     def protein_profile(self):
@@ -118,11 +124,21 @@ class MultimodalAttentionData(object):
         assert isinstance(vocab, dict)
         self._protein_vocab = vocab
 
+    @property
+    def protein_sequences(self):
+        return self._prot_sequences
+
+    @protein_sequences.setter
+    def protein_sequences(self, p_dict):
+        assert isinstance(p_dict, dict)
+        self._prot_sequences = p_dict
+
     def register_data(self, data_xs):
         assert isinstance(data_xs, dict)
         self._data_xs = data_xs
 
     def joint_attn_forward_hook(self, layer_num, x, x_prime, wts, num_segs):
+        self._registry.clear()
         x = x.cpu().detach()
         x_prime = x_prime.cpu().detach()
         wts = wts.cpu().detach()
@@ -134,7 +150,7 @@ class MultimodalAttentionData(object):
 
         # record unimodal attention data
         for lbl, un_x, un_x_prime, un_wts in zip(self._labels, xs, x_primes, wts_lst):
-            unimodal_attn_data = UnimodalAttentionData(lbl, self._data_xs[lbl],
+            unimodal_attn_data = UnimodalAttentionData(lbl, self._data_xs[lbl], self.protein_sequences,
                                                        self.protein_profile, self.protein_vocabulary,
                                                        layer_num, un_x, un_x_prime, un_wts)
             self._registry.append(unimodal_attn_data)
@@ -143,5 +159,4 @@ class MultimodalAttentionData(object):
         self._data_xs.clear()
 
     def get_rankings(self, k=10):
-        results = [unimodal.rank_segments(k) for unimodal in self._registry]
-        return results
+        return [unimodal.rank_segments(k) for unimodal in self._registry]

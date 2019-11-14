@@ -48,13 +48,13 @@ from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1, 8, 64]
+seeds = [1]  # , 8, 64]
 
 # seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(3)
 
 use_ecfp8 = True
 use_weave = False
@@ -230,7 +230,7 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
 
     layers = [NwayForward(models=views.values())]
 
-    func_callback = joint_attention_data.joint_attn_forward_hook
+    func_callback = joint_attention_data.joint_attn_forward_hook if hparams["explain_mode"] else None
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"],
                                  attn_hook=func_callback))
@@ -270,13 +270,13 @@ class IntegratedViewDTI(Trainer):
                                        shuffle=True,
                                        collate_fn=lambda x: x)
         val_data_loader = DataLoader(dataset=val_dataset,
-                                     batch_size=hparams["val_batch_size"],
+                                     batch_size=1 if hparams["explain_mode"] else hparams["val_batch_size"],
                                      shuffle=False,
                                      collate_fn=lambda x: x)
         test_data_loader = None
         if test_dataset is not None:
             test_data_loader = DataLoader(dataset=test_dataset,
-                                          batch_size=hparams["test_batch_size"],
+                                          batch_size=1 if hparams["explain_mode"] else hparams["test_batch_size"],
                                           shuffle=False,
                                           collate_fn=lambda x: x)
 
@@ -585,10 +585,12 @@ class IntegratedViewDTI(Trainer):
         true_vals = []
         model_preds_node = DataNode(label="model_predictions", data={"y": true_vals,
                                                                      "y_pred": predicted_vals})
+        attn_ranking = []
+        attn_ranking_node = DataNode(label="attn_ranking", data=attn_ranking)
 
         # add sim data nodes to parent node
         if sim_data_node:
-            sim_data_node.data = [metrics_node, scores_node, model_preds_node]
+            sim_data_node.data = [metrics_node, scores_node, model_preds_node, attn_ranking_node]
 
         # Main evaluation loop
         i = 0
@@ -620,8 +622,118 @@ class IntegratedViewDTI(Trainer):
             with torch.set_grad_enabled(False):
                 Ys = {k: Ys[k].astype(np.float) for k in Ys}
                 # Ensure corresponding pairs
-                for i in range(1, len(Ys.values())):
-                    assert (list(Ys.values())[i - 1] == list(Ys.values())[i]).all()
+                for j in range(1, len(Ys.values())):
+                    assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
+
+                y_true = Ys[list(Xs.keys())[0]]
+                w = Ws[list(Xs.keys())[0]]
+
+                # protein data in batch
+                protein_xs = []
+                for m_type in prot_model_types:
+                    if m_type in ["p2v", "rnn", "pcnn", "pcnn2d"]:
+                        protein_xs.append(Xs[list(Xs.keys())[0]][2])
+                    elif m_type == "psc":
+                        protein_xs.append(Xs[list(Xs.keys())[0]][1])
+                    attn_data_x[m_type] = Xs[list(Xs.keys())[0]][2]
+
+                # compound data in batch
+                X = []
+                if use_ecfp8:
+                    X.append(Xs["ecfp8"][0])
+                if use_weave:
+                    X.append(Xs["weave"][0])
+                if use_gconv:
+                    X.append(Xs["gconv"][0])
+                if use_gnn:
+                    X.append(Xs["gnn"][0])
+
+                # merge compound and protein list
+                X = X + protein_xs
+
+                # forward propagation
+                y_predicted = model(X)
+
+                # apply transformers
+                transformer = transformers_dict[list(Xs.keys())[0]]
+                predicted_vals.extend(np_to_plot_data(undo_transforms(y_predicted.cpu().detach().numpy(), transformer)))
+                true_vals.extend(np_to_plot_data(undo_transforms(y_true, transformer)))
+
+            eval_dict = {}
+            score = eval_fn(eval_dict, y_true, y_predicted, w, metrics, tasks, transformer)
+
+            # for sim data resource
+            scores_lst.append(score)
+            for m in eval_dict:
+                if m in metrics_dict:
+                    metrics_dict[m].append(eval_dict[m])
+                else:
+                    metrics_dict[m] = [eval_dict[m]]
+
+            print("\nbatch={}/{}, evaluation results= {}, score={}".format(i + 1, len(data_loaders['val']), eval_dict,
+                                                                           score))
+
+            i += 1
+        # End of mini=batch iterations.
+
+        duration = time.time() - start
+        print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
+
+    @staticmethod
+    def explain_model(model, model_dir, model_name, data_loaders, transformers_dict, prot_desc_dict, prot_model_types,
+                      sim_data_node, max_print=10, k=10):
+        # load saved model and put in evaluation mode
+        model.load_state_dict(io.load_model(model_dir, model_name, dvc=torch.device("cuda:2")))
+        model.eval()
+
+        print("Model explanation...")
+        start = time.time()
+
+        # sub-nodes of sim data resource
+        attn_ranking = []
+        attn_ranking_node = DataNode(label="attn_ranking", data=attn_ranking)
+
+        # add sim data nodes to parent node
+        if sim_data_node:
+            sim_data_node.data = [attn_ranking_node]
+
+        # Main evaluation loop
+        i = 0
+        for batch in tqdm(data_loaders['val']):
+            if i == max_print:
+                print('\nMaximum number [%d] of samples limit reached. Terminating...' % i)
+                break
+            i += 1
+
+            batch_size, data = batch_collator(batch, prot_desc_dict, spec={"ecfp8": use_ecfp8,
+                                                                           "weave": use_weave,
+                                                                           "gconv": use_gconv,
+                                                                           "gnn": use_gnn},
+                                              cuda_prot=True)
+
+            # attention x data for analysis
+            attn_data_x = {}
+
+            # organize the data for each view.
+            Xs = {}
+            Ys = {}
+            Ws = {}
+            for view_name in data:
+                view_data = data[view_name]
+                if view_name == "gconv":
+                    x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
+                    Xs["gconv"] = x
+                else:
+                    Xs[view_name] = view_data[0]
+                Ys[view_name] = np.array([k for k in view_data[1]], dtype=np.float)
+                Ws[view_name] = np.array([k for k in view_data[2]], dtype=np.float)
+                attn_data_x[view_name] = view_data[0][3]
+
+            with torch.set_grad_enabled(False):
+                Ys = {k: Ys[k].astype(np.float) for k in Ys}
+                # Ensure corresponding pairs
+                for j in range(1, len(Ys.values())):
+                    assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
 
                 y_true = Ys[list(Xs.keys())[0]]
                 w = Ws[list(Xs.keys())[0]]
@@ -656,33 +768,24 @@ class IntegratedViewDTI(Trainer):
                 y_predicted = model(X)
 
                 # get segments ranking
-                rank_results = joint_attention_data.get_rankings(k=10)
-
-                # apply transformers
                 transformer = transformers_dict[list(Xs.keys())[0]]
-                predicted_vals.extend(
-                    undo_transforms(y_predicted.cpu().detach().numpy(), transformer).squeeze().tolist())
-                true_vals.extend(undo_transforms(y_true, transformer).astype(np.float).squeeze().tolist())
-
-            eval_dict = {}
-            score = eval_fn(eval_dict, y_true, y_predicted, w, metrics, tasks, transformer)
-
-            # for sim data resource
-            scores_lst.append(score)
-            for m in eval_dict:
-                if m in metrics_dict:
-                    metrics_dict[m].append(eval_dict[m])
-                else:
-                    metrics_dict[m] = [eval_dict[m]]
-
-            print("\nbatch={}/{}, evaluation results= {}, score={}".format(i + 1, len(data_loaders['val']), eval_dict,
-                                                                           score))
-
-            i += 1
+                rank_results = {'y_pred': np_to_plot_data(undo_transforms(y_predicted.cpu().detach().numpy(),
+                                                                          transformer)),
+                                'y_true': np_to_plot_data(undo_transforms(y_true, transformer)),
+                                'attn_ranking': joint_attention_data.get_rankings(k)}
+                attn_ranking.append(rank_results)
         # End of mini=batch iterations.
 
         duration = time.time() - start
-        print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
+        print('\nModel explanation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
+
+
+def np_to_plot_data(y):
+    y = y.squeeze()
+    if y.shape == ():
+        return [float(y)]
+    else:
+        return y.squeeze().tolist()
 
 
 def main(flags):
@@ -704,8 +807,15 @@ def main(flags):
     split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
         flags["cold_drug"] else "None"
     dataset_lbl = flags["dataset"]
-    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
-                                         date_label)
+
+    if flags["eval"]:
+        mode = "eval"
+    elif flags["explain"]:
+        mode = "explain"
+    else:
+        mode = "train"
+
+    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, mode, date_label)
     sim_data = DataNode(label=node_label)
     nodes_list = []
     sim_data.data = nodes_list
@@ -723,14 +833,15 @@ def main(flags):
     # set joint attention hook's protein information
     joint_attention_data.protein_profile = prot_profile
     joint_attention_data.protein_vocabulary = prot_vocab
+    joint_attention_data.protein_sequences = prot_seq_dict
 
     # For searching over multiple seeds
     hparam_search = None
 
     for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
-                                                                                          dt.now().strftime(
-                                                                                              "%Y_%m_%d__%H_%M_%S")))
+        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_test_runs/{}_{}_{}/".format(sim_label, seed,
+                                                                                               dt.now().strftime(
+                                                                                                   "%Y_%m_%d__%H_%M_%S")))
 
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -835,7 +946,7 @@ def main(flags):
                              prot_profile, pretrained_embeddings, prot_vocab, summary_writer_creator)
 
     # save simulation data resource tree to file.
-    # sim_data.to_json(path="./analysis/")
+    sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, protein_profile,
@@ -867,7 +978,11 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                                          val_dataset=data["val"], test_dataset=data["test"])
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
-                               data_loaders, metrics, transformers_dict, prot_desc_dict, prot_model_types, tasks, sim_data_node)
+                               data_loaders, metrics, transformers_dict, prot_desc_dict, prot_model_types, tasks,
+                               sim_data_node)
+    elif flags["explain"]:
+        trainer.explain_model(model, flags["model_dir"], flags["eval_model_name"], data_loaders, transformers_dict,
+                              prot_desc_dict, prot_model_types, sim_data_node)
     else:
         # Train the model
         model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_types,
@@ -950,34 +1065,35 @@ def default_hparams_bopt(flags):
     NOTE: All protein models, except 'psc' and 'p2v', use embeddings from the :class:Prot2Vec module.
     """
     return {
-        "attn_heads": 4,
+        "explain_mode": flags.explain,
+        "attn_heads": 2,
         "attn_layers": 1,
-        "lin_dims": [1424, 64],
+        "lin_dims": [1033, 1481, 1800],
         "output_dim": len(flags.tasks),
-        "latent_dim": 256,
+        "latent_dim": 512,
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout
-        "dprob": 0.1,
+        "dprob": 0.2,
 
-        "tr_batch_size": 128,
+        "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "adamax",
-        "optimizer__global__weight_decay": 0.0009,
-        "optimizer__global__lr": 0.0006,
+        "optimizer__global__weight_decay": 0.0007,
+        "optimizer__global__lr": 0.0004,
         "prot": {
             "model_types": flags["prot_model_types"],
             "vocab_size": flags["prot_vocab_size"],
             "window": 11,
             "pcnn_num_layers": 2,
-            "embedding_dim": 10,
+            "embedding_dim": 33,
             "psc_dim": 8421,
-            "rnn_hidden_state_dim": 10
+            "rnn_hidden_state_dim": 27
         },
         "weave": {
             "dim": 50,
@@ -1185,7 +1301,10 @@ if __name__ == '__main__':
                         help="Hyperparameter search algorithm to use. One of [bayopt_search, random_search]")
     parser.add_argument("--eval",
                         action="store_true",
-                        help="If true, a saved model is loaded and evaluated using CV")
+                        help="If true, a saved model is loaded and evaluated")
+    parser.add_argument("--explain",
+                        action="store_true",
+                        help="If true, a saved model is loaded and used in ranking segments to explain predictions")
     parser.add_argument("--eval_model_name",
                         default=None,
                         type=str,
