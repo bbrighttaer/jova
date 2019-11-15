@@ -835,7 +835,7 @@ class ProtCnnForward(nn.Module):
         :param inputs: list
         :return:
         """
-        prot_input, comp_input = inputs
+        comp_input, prot_input = inputs
         comp_out = self.gnet(comp_input)
         prot_input = self.prot2vec(prot_input)
         prot_out = self.pcnn(prot_input, comp_out)

@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import logging
 import random
 import time
 from datetime import datetime as dt
@@ -21,6 +22,9 @@ import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from deepchem.trans import undo_transforms
+from soek.bopt import BayesianOptSearchCV
+from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam, RealParam
+from soek.rand import RandomSearchCV
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -28,21 +32,17 @@ from tqdm import tqdm
 import jova.metrics as mt
 from jova import cuda
 from jova.data import batch_collator, get_data, load_proteins, DtiDataset
-from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam, RealParam
-from soek.rand import RandomSearchCV
 from jova.metrics import compute_model_performance
-from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather, GraphGather2D, Unsqueeze, ElementwiseBatchNorm
-from jova.nn.models import GraphConvSequential, PairSequential, create_fcn_layers, NwayForward, JointAttention, \
+from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather2D, Unsqueeze, ElementwiseBatchNorm
+from jova.nn.models import GraphConvSequential, create_fcn_layers, NwayForward, JointAttention, \
     WeaveModel, Prot2Vec, ProteinRNN, ProteinCNN, ProteinCNN2D, GraphNeuralNet2D
 from jova.utils import Trainer, io
 from jova.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
+from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
 from jova.utils.sim_data import DataNode
 from jova.utils.tb import TBMeanTracker
-from jova.utils.train_helpers import count_parameters, GradStats, create_torch_embeddings, FrozenModels
-from jova.utils.io import load_pickle, load_numpy_array
-import logging
+from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filename='error.log')
 
@@ -50,8 +50,8 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [1, 8, 64]
-seeds = [8, 16, 32]
-# seeds = [123, 124, 125]
+# seeds = [8, 16, 32]
+seeds = [123, 124, 125]
 
 check_data = False
 
@@ -102,7 +102,8 @@ def create_prot_net(hparams, model_type, protein_profile, protein_embeddings, fr
                                          window=hparams["prot"]["window"],
                                          activation="relu",
                                          pooling_dim=0,
-                                         num_layers=hparams["prot"]["pcnn_num_layers"]))
+                                         num_layers=hparams["prot"]["pcnn_num_layers"]),
+                              Unsqueeze(dim=0))
     elif model_type == "pcnn2d":
         # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,

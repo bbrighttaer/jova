@@ -316,9 +316,9 @@ class CPIBaseline(Trainer):
                         protein_x = data[view_lbl][0][2]
                         if view_lbl == "gconv":
                             # graph data structure is: [(compound data, batch_size), protein_data]
-                            X = (protein_x, (data[view_lbl][0][0], batch_size))
+                            X = ((data[view_lbl][0][0], batch_size), protein_x)
                         else:
-                            X = (protein_x, data[view_lbl][0][0])
+                            X = (data[view_lbl][0][0], protein_x)
                         y = np.array([k for k in data[view_lbl][1]], dtype=np.float)
                         w = np.array([k for k in data[view_lbl][2]], dtype=np.float)
 

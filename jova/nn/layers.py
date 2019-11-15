@@ -501,8 +501,7 @@ class Conv2d(nn.Conv2d):
 
 class Reshape(nn.Module):
     """
-    Reshapes a tensor using the given shape. The batch size is the first argument and it's set by default.
-    Thus, the passed shape does not include the batch size.
+    Reshapes a tensor using the given shape.
     """
 
     def __init__(self, shape):
@@ -511,11 +510,10 @@ class Reshape(nn.Module):
 
     def forward(self, x):
         """
-        Assumes that the shape of x has the structure: (batch_size, ...)
         :param x:
         :return:
         """
-        return x.view(x.size()[0], *self.shape)
+        return x.view(*self.shape)
 
 
 class Flatten(nn.Module):
@@ -558,11 +556,27 @@ class Unsqueeze(nn.Module):
         return x.unsqueeze(dim=self.dim)
 
 
+class LambdaLayer(nn.Module):
+    """
+    Encapsulates a tensor operation.
+    Not meant to have any trainable parameters.
+    """
+
+    def __init__(self, func):
+        super(LambdaLayer, self).__init__()
+        self.func = func
+
+    def forward(self, x):
+        x = self.func(x)
+        return x
+
+
 class ElementwiseBatchNorm(nn.Module):
     """
     Applies normalization to each element in a tensor.
     It assumes the model dimension is the last element in tensor.shape
     """
+
     def __init__(self, dim):
         super(ElementwiseBatchNorm, self).__init__()
         self.batch_norm = nn.BatchNorm1d(dim)

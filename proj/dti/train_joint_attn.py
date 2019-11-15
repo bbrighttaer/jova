@@ -48,13 +48,13 @@ from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1]  # , 8, 64]
+seeds = [1, 8, 64]
 
 # seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(3)
+torch.cuda.set_device(0)
 
 use_ecfp8 = True
 use_weave = False
@@ -103,7 +103,8 @@ def create_prot_net(hparams, model_type, protein_profile, protein_embeddings, fr
                                          window=hparams["prot"]["window"],
                                          activation="relu",
                                          pooling_dim=0,
-                                         num_layers=hparams["prot"]["pcnn_num_layers"]))
+                                         num_layers=hparams["prot"]["pcnn_num_layers"]),
+                              Unsqueeze(dim=0))
     elif model_type == "pcnn2d":
         # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
@@ -799,7 +800,7 @@ def main(flags):
     if use_gnn:
         comp_lbl.append("gnn")
     comp_lbl = '_'.join(comp_lbl)
-    flags["prot_model_types"] = ["psc", "rnn"]
+    flags["prot_model_types"] = ["rnn"]
     sim_label = "integrated_view_attn_no_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
     print("CUDA={}, view={}".format(cuda, sim_label))
 
@@ -839,9 +840,9 @@ def main(flags):
     hparam_search = None
 
     for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_test_runs/{}_{}_{}/".format(sim_label, seed,
-                                                                                               dt.now().strftime(
-                                                                                                   "%Y_%m_%d__%H_%M_%S")))
+        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs/{}_{}_{}/".format(sim_label, seed,
+                                                                                          dt.now().strftime(
+                                                                                              "%Y_%m_%d__%H_%M_%S")))
 
         # for data collection of this round of simulation.
         data_node = DataNode(label="seed_%d" % seed)
@@ -938,7 +939,7 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
@@ -1115,6 +1116,7 @@ def default_hparams_bopt(flags):
 
 def get_hparam_config(flags):
     return {
+        "explain_mode": ConstantParam(flags.explain),
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
         "attn_layers": DiscreteParam(min=1, max=3),
         "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
@@ -1145,7 +1147,7 @@ def get_hparam_config(flags):
             "psc_dim": ConstantParam(8421),
             "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
         }),
-        "weave": DictParam({
+        "weave": ConstantParam({
             "dim": DiscreteParam(min=64, max=512),
             "update_pairs": ConstantParam(False),
         }),
@@ -1155,7 +1157,7 @@ def get_hparam_config(flags):
         "ecfp8": DictParam({
             "dim": ConstantParam(1024),
         }),
-        "gnn": DictParam({
+        "gnn": ConstantParam({
             "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"]) if use_gnn else 0),
             "num_layers": DiscreteParam(1, 4),
             "dim": DiscreteParam(min=64, max=512),
