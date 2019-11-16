@@ -44,9 +44,9 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
-seeds = [1, 8, 64]
-
-torch.cuda.set_device(1)
+# seeds = [1, 8, 64]
+seeds = [64]
+torch.cuda.set_device(0)
 
 
 def create_prot_net(hparams, protein_profile):
@@ -506,9 +506,8 @@ class SingleViewDTI(Trainer):
 
 
 def main(flags):
-    flags["prot_model_type"] = "psc"
     if len(flags["views"]) > 0:
-        print("Single views for training:", flags["views"])
+        print("Single views for training: {}, num={}".format(flags["views"], len(flags["views"])))
     else:
         print("No views selected for training")
 
@@ -601,7 +600,7 @@ def main(flags):
                                     "n_iters": n_iters,
                                     "view": view}
 
-                hparams_conf = get_hparam_config(flags, view)
+                hparams_conf = get_hparam_config(flags, cview, pview)
 
                 if hparam_search is None:
                     search_alg = {"random_search": RandomSearchCV,
@@ -717,7 +716,6 @@ def default_hparams_rand(flags, view):
 def default_hparams_bopt(flags, comp_view, prot_view):
     return {
         "comp_view": comp_view,
-        "prot_view": prot_view,
         "hdims": [653, 3635],
         "output_dim": len(flags["tasks"]),
 
@@ -742,8 +740,7 @@ def default_hparams_bopt(flags, comp_view, prot_view):
             "vocab_size": flags["prot_vocab_size"],
             "window": 11,
             "dim": 8421 if prot_view == "psc" else 50,
-            "pcnn_num_layers": 2,
-            "psc_dim": 8421
+            "pcnn_num_layers": 2
         },
 
         "weave": {
@@ -764,13 +761,10 @@ def default_hparams_bopt(flags, comp_view, prot_view):
     }
 
 
-def get_hparam_config(flags, view):
+def get_hparam_config(flags, comp_view, prot_view):
     return {
-        "view": ConstantParam(view),
-        "prot_dim": ConstantParam(8421),
-        "comp_dim": ConstantParam(1024),
+        "comp_view": ConstantParam(comp_view),
         "hdims": DiscreteParam(min=256, max=5000, size=DiscreteParam(min=1, max=4)),
-        "graph_dim": DiscreteParam(min=64, max=512),
         "output_dim": ConstantParam(len(flags["tasks"])),
 
         # weight initialization
@@ -779,20 +773,37 @@ def get_hparam_config(flags, view):
         # dropout regs
         "dprob": LogRealParam(min=-2),
 
-        "tr_batch_size": CategoricalParam(choices=[32, 64, 128, 256, 512]),
-        "val_batch_size": ConstantParam(512),
-        "test_batch_size": ConstantParam(512),
+        "tr_batch_size": CategoricalParam(choices=[128, 256]),
+        "val_batch_size": ConstantParam(128),
+        "test_batch_size": ConstantParam(128),
 
         # optimizer params
         "optimizer": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
         "optimizer__global__weight_decay": LogRealParam(),
         "optimizer__global__lr": LogRealParam(),
 
-        "gnn": DictParam({
-            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"])),
-            "num_layers": DiscreteParam(1, 4),
+        "prot": DictParam({
+            "model_type": ConstantParam(prot_view),
+            "vocab_size": ConstantParam(flags["prot_vocab_size"]),
+            "window": ConstantParam(11),
+            "dim": ConstantParam(8421) if prot_view == "psc" else DiscreteParam(min=5, max=50),
+            "pcnn_num_layers": DiscreteParam(min=1, max=4)
+        }),
+        "weave": DictParam({
+            "dim": DiscreteParam(min=64, max=512),
+            "update_pairs": ConstantParam(False),
+        }),
+        "gconv": DictParam({
             "dim": DiscreteParam(min=64, max=512),
         }),
+        "ecfp8": DictParam({
+            "dim": ConstantParam(1024),
+        }),
+        "gnn": DictParam({
+            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"])) if flags["gnn_fingerprint"] else ConstantParam(0),
+            "num_layers": DiscreteParam(1, 4),
+            "dim": DiscreteParam(min=64, max=512),
+        })
 
         # # SGD
         # "optimizer__sgd__nesterov": CategoricalParam(choices=[True, False]),

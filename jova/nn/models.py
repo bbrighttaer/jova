@@ -358,7 +358,7 @@ class GraphNeuralNet(nn.Module):
         super(GraphNeuralNet, self).__init__()
         self.output = update
         self.activation = get_activation_func(activation)
-        self.embed_fingerprint = nn.Embedding(num_fingerprints, embedding_dim)
+        self.embed_fingerprint = nn.Embedding(num_fingerprints, int(embedding_dim))
         self.W_gnn = nn.ModuleList([nn.Linear(embedding_dim, embedding_dim) for _ in range(num_layers)])
 
     def update_fingerprints(self, xs, A, M, i):
