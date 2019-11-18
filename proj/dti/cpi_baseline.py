@@ -36,17 +36,16 @@ from jova.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, P
     ProtCnnForward, GraphNeuralNet, Prot2Vec
 from jova.utils import Trainer, io
 from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
-from jova.utils.io import load_model, save_model, load_pickle, load_numpy_array
+from jova.utils.io import load_model, save_model, load_pickle
 from jova.utils.math import ExpAverage
 from jova.utils.sim_data import DataNode
-from jova.utils.train_helpers import count_parameters, create_torch_embeddings, FrozenModels
+from jova.utils.train_helpers import count_parameters, FrozenModels
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-
-seeds = [1, 8, 64]
-
+# seeds = [1, 8, 64]
+seeds = [1]
 # seeds = [123, 124, 125]
 
 torch.cuda.set_device(0)
@@ -133,8 +132,8 @@ def create_gnn_net(hparams):
 class CPIBaseline(Trainer):
 
     @staticmethod
-    def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, protein_embeddings,
-                   cuda_devices=None, mode="regression"):
+    def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, cuda_devices=None,
+                   mode="regression"):
         frozen_models = FrozenModels()
 
         # create network
@@ -500,7 +499,7 @@ def main(flags):
         # Runtime Protein stuff
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
         prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
-        pretrained_embeddings = None # load_numpy_array(flags.protein_embeddings)
+        # pretrained_embeddings = None # load_numpy_array(flags.protein_embeddings)
         flags["prot_vocab_size"] = len(prot_vocab)
         # flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
 
@@ -555,8 +554,7 @@ def main(flags):
                 # arguments to callables
                 extra_init_args = {"mode": "regression",
                                    "cuda_devices": cuda_devices,
-                                   "protein_profile": prot_profile,
-                                   "protein_embeddings": pretrained_embeddings}
+                                   "protein_profile": prot_profile}
                 extra_data_args = {"flags": flags,
                                    "data_dict": data_dict}
                 extra_train_args = {"transformers_dict": transformers_dict,
@@ -595,14 +593,14 @@ def main(flags):
                 print("Best params = {}".format(stats.best(m="max")))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node,
-                             view, prot_profile, pretrained_embeddings)
+                             view, prot_profile)
 
         # save simulation data resource tree to file.
         # sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
-                 prot_profile, pretrained_embeddings):
+                 prot_profile):
     hyper_params = default_hparams_bopt(flags, view)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
@@ -613,21 +611,20 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
             start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                       transformers_dict, view, prot_profile, pretrained_embeddings, k)
+                       transformers_dict, view, prot_profile, k)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                   transformers_dict, view, prot_profile, pretrained_embeddings)
+                   transformers_dict, view, prot_profile)
 
 
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-               transformers_dict, view, prot_profile, embeddings, k=None):
+               transformers_dict, view, prot_profile, k=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics, frozen_models = trainer.initialize(hparams=hyper_params,
                                                                                 train_dataset=data["train"],
                                                                                 val_dataset=data["val"],
                                                                                 test_dataset=data["test"],
-                                                                                protein_profile=prot_profile,
-                                                                                protein_embeddings=embeddings)
+                                                                                protein_profile=prot_profile)
     if flags["eval"]:
         trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
@@ -856,11 +853,11 @@ if __name__ == '__main__':
                         type=str,
                         help='A resource containing all N-gram segments/words constructed from the protein sequences.'
                         )
-    parser.add_argument('--prot_embeddings',
-                        type=str,
-                        dest="protein_embeddings",
-                        help='Numpy array file containing the pretrained protein "words" embeddings'
-                        )
+    # parser.add_argument('--prot_embeddings',
+    #                     type=str,
+    #                     dest="protein_embeddings",
+    #                     help='Numpy array file containing the pretrained protein "words" embeddings'
+    #                     )
     parser.add_argument('--no_reload',
                         action="store_false",
                         dest='reload',

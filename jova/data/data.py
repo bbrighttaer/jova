@@ -18,6 +18,7 @@ import torch
 from padme.feat.mol_graphs import ConvMol
 from torch.utils.data import dataset as ds
 
+from jova import cuda as _cuda
 from jova.molnet.load_function.davis_dataset import load_davis
 from jova.molnet.load_function.kiba_dataset import load_kiba
 from jova.molnet.load_function.kinase_datasets import load_kinases
@@ -27,8 +28,6 @@ from jova.molnet.load_function.tc_dataset import load_toxcast
 from jova.molnet.load_function.tc_full_kinase_datasets import load_tc_full_kinases
 from jova.molnet.load_function.tc_kinase_datasets import load_tc_kinases
 from jova.utils.math import block_diag_irregular
-
-from jova import cuda as _cuda
 
 
 def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
