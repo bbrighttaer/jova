@@ -135,13 +135,14 @@ class Splitter(object):
                                               frac_test=0,
                                               seed=seed)
             # divide the cv individuals into val and test sets
-            cv_inds = list(cv_inds)
-            fold_inds = set(cv_inds[:len(cv_inds) // 2])
-            test_inds = set(cv_inds[len(cv_inds) // 2:])
-            assert len(fold_inds & test_inds) == 0
+            cv_inds = np.array(list(cv_inds))
+            test_inds = set(np.random.choice(cv_inds, len(cv_inds) // 2, replace=False))
+            val_inds = set(cv_inds)
+            val_inds = val_inds.difference(test_inds)
+            assert len(val_inds & test_inds) == 0
             self.split_warm = False  # self.split_warm is only useful in the first time.
             self.threshold = 0  # Filtering is done after the first split.
-            cv_dataset = rem_dataset.select(fold_inds, select_dir=cv_dir)
+            val_dataset = rem_dataset.select(val_inds, select_dir=cv_dir)
             test_dataset = rem_dataset.select(test_inds, select_dir=test_dir)
             rem_dataset = rem_dataset.select(rem_inds)
 
@@ -152,12 +153,12 @@ class Splitter(object):
             train_datasets.append(train_dataset)
 
             update_train_base_merge = filter(lambda x: x is not None,
-                                             [train_ds_base, cv_dataset, test_dataset])
+                                             [train_ds_base, val_dataset, test_dataset])
             train_ds_base = DiskDataset.merge(update_train_base_merge)
             if self.oversampled:
-                cv_dataset = cv_dataset.get_unique_pairs()
+                val_dataset = val_dataset.get_unique_pairs()
                 # pdb.set_trace()
-            cv_datasets.append(cv_dataset)
+            cv_datasets.append(val_dataset)
             test_datasets.append(test_dataset)
         return list(zip(train_datasets, cv_datasets, test_datasets))
 

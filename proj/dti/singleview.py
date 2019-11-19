@@ -43,8 +43,8 @@ from jova.utils.train_helpers import count_parameters
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [123, 124, 125]
-seeds = [1, 8, 64]
+seeds = [123, 124, 125]
+# seeds = [1, 8, 64]
 torch.cuda.set_device(3)
 
 
@@ -629,7 +629,7 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt, n_iters))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
