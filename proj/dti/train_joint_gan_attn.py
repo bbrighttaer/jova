@@ -49,9 +49,9 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filen
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [1, 8, 64]
+seeds = [1, 8, 64]
 # seeds = [8, 16, 32]
-seeds = [123, 124, 125]
+# seeds = [123, 124, 125]
 
 check_data = False
 
@@ -657,7 +657,7 @@ class IntegratedViewDTI(Trainer):
         # Main evaluation loop
         for epoch in range(n_epochs):
 
-            for phase in ["val"]:  # ["train", "val"]:
+            for phase in ["test"]:  # ["train", "val"]:
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
@@ -883,14 +883,14 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
             start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                       transformers_dict, view, protein_profile, protein_embeddings, k, tb_writer)
+                       transformers_dict, view, protein_profile, protein_embeddings, tb_writer, k)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
                    transformers_dict, view, protein_profile, protein_embeddings, tb_writer)
 
 
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-               transformers_dict, view, protein_profile, protein_embeddings, k=None, tb_writer=None):
+               transformers_dict, view, protein_profile, protein_embeddings, tb_writer=None, k=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics, prot_model_types, weighted_loss, \
     neigh_dist, frozen_models = trainer.initialize(hparams=hyper_params,

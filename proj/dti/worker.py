@@ -78,8 +78,8 @@ def retrieve_resource_cv(k, seeds, r_name, r_data, res_names):
 
 if __name__ == '__main__':
     chart_type = "png"
-    folder = "eval_2019_08_11"
-    qualifier = "eval_2019_08_11"
+    folder = "analysis"
+    qualifier = "davis_ecfp8_psc_cold_drug_eval_2019_11_19__17_19_23"
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
     files.sort()
     results_folder = "results_" + folder + '_' + chart_type
@@ -92,7 +92,7 @@ if __name__ == '__main__':
             data = json.load(f)
 
         root_name = file.split(".j")[0]
-        data_dict = retrieve_resource_cv(k=5, seeds=[123, 124, 125], r_name=root_name, r_data=data,
+        data_dict = retrieve_resource_cv(k=5, seeds=[1, 8, 64], r_name=root_name, r_data=data,
                                          res_names=[
                                              ("validation_metrics/nanmean-rms_score", 0),
                                              ("validation_metrics/nanmean-concordance_index", 0),
