@@ -11,7 +11,8 @@ import pandas as pd
 
 import jova.splits as splits
 from feat.gnnfeat import GNNFeaturizer
-from jova.utils.io import save_nested_cv_dataset_to_disk, load_nested_cv_dataset_from_disk
+from jova.utils.io import save_nested_cv_dataset_to_disk, load_nested_cv_dataset_from_disk, save_dataset_to_disk, \
+    load_dataset_from_disk
 
 
 def load_davis(featurizer='Weave', cross_validation=False, test=False, split='random',
@@ -21,7 +22,11 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
                gnn_radius=2):
     if cross_validation:
         assert not test
+    feat_label = featurizer
     data_dir = currdir + "davis_data/"
+    gnn_fingerprint = None
+    # for Kron-RLS and other kernel-based methods
+    drug_sim_kernel_dict = prot_sim_kernel_dict = None
     if input_protein:
         if mode == 'regression' or mode == 'reg-threshold':
             mode = 'regression'
@@ -61,34 +66,30 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         if cross_validation:
             delim = "_CV" + delim
             save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
-            loaded, all_dataset, transformers = load_nested_cv_dataset_from_disk(save_dir, K)
+            loaded, all_dataset, transformers, fp, kernel_dicts = load_nested_cv_dataset_from_disk(save_dir, K)
         else:
             save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
-            loaded, all_dataset, transformers = padme.utils.save.load_dataset_from_disk(
-                save_dir)
+            loaded, all_dataset, transformers, fp, kernel_dicts = load_dataset_from_disk(save_dir)
         if loaded:
-            return tasks, all_dataset, transformers
+            return tasks, all_dataset, transformers, fp, kernel_dicts
 
     dataset_file = os.path.join(data_dir, file_name)
     if featurizer == 'Weave':
         featurizer = padme.feat.WeaveFeaturizer()
-    elif featurizer == 'ECFP4':
+    elif featurizer in ['ECFP4', 'KRLS_ECFP4']:
         featurizer = padme.feat.CircularFingerprint(size=1024, radius=2)
-    elif featurizer == 'ECFP8':
+    elif featurizer in ['ECFP8', 'KRLS_ECFP8']:
         featurizer = padme.feat.CircularFingerprint(size=1024, radius=4)
     elif featurizer == 'GraphConv':
         featurizer = padme.feat.ConvMolFeaturizer()
     elif featurizer == 'GNN':
         featurizer = GNNFeaturizer(radius=gnn_radius)
+        gnn_fingerprint = featurizer.fingerprint_dict
 
     loader = padme.data.CSVLoader(
         tasks=tasks, smiles_field="smiles", protein_field="proteinName",
         source_field='protein_dataset', featurizer=featurizer, prot_seq_dict=prot_seq_dict)
     dataset = loader.featurize(dataset_file, shard_size=8192)
-
-    # Save GNN info needed at runtime
-    if isinstance(featurizer, GNNFeaturizer):
-        featurizer.save_featurization_info(data_dir)
 
     if mode == 'regression':
         transformers = [
@@ -103,6 +104,10 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
     print("About to transform data")
     for transformer in transformers:
         dataset = transformer.transform(dataset)
+
+    if feat_label in ['KRLS_ECFP8', 'KRLS_ECFP4']:
+        from jova.data.data import compute_similarity_kernel_matrices
+        drug_sim_kernel_dict, prot_sim_kernel_dict = compute_similarity_kernel_matrices(dataset)
 
     splitters = {
         'index': deepchem.splits.IndexSplitter(),
@@ -121,21 +126,21 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         train, valid, test = splitter.train_valid_test_split(dataset, seed=seed)
         all_dataset = (train, valid, test)
         if reload:
-            padme.utils.save.save_dataset_to_disk(save_dir, train, valid, test,
-                                                  transformers)
+            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint,
+                                 drug_sim_kernel_dict, prot_sim_kernel_dict)
     elif cross_validation:
         fold_datasets = splitter.k_fold_split(dataset, K, seed=seed)
         all_dataset = fold_datasets
         if reload:
-            save_nested_cv_dataset_to_disk(save_dir, all_dataset, K, transformers)
-
+            save_nested_cv_dataset_to_disk(save_dir, all_dataset, K, transformers, gnn_fingerprint,
+                                           drug_sim_kernel_dict, prot_sim_kernel_dict)
     else:
         # not cross validating, and not testing.
         train, valid, test = splitter.train_valid_test_split(dataset, frac_train=0.9, frac_valid=0.1,
                                                              frac_test=0, seed=seed)
         all_dataset = (train, valid, test)
         if reload:
-            padme.utils.save.save_dataset_to_disk(save_dir, train, valid, test,
-                                                  transformers)
+            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint,
+                                 drug_sim_kernel_dict, prot_sim_kernel_dict)
 
-    return tasks, all_dataset, transformers
+    return tasks, all_dataset, transformers, gnn_fingerprint, (drug_sim_kernel_dict, prot_sim_kernel_dict)

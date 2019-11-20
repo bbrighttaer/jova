@@ -47,7 +47,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
 seeds = [1, 8, 64]
-torch.cuda.set_device(3)
+torch.cuda.set_device(0)
 
 
 def create_prot_net(hparams, protein_profile):
@@ -554,9 +554,7 @@ def main(flags):
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
         prot_profile = load_pickle(file_name=flags['prot_profile'])
         prot_vocab = load_pickle(file_name=flags['prot_vocab'])
-        # pretrained_embeddings = load_numpy_array(flags['protein_embeddings'])
         flags["prot_vocab_size"] = len(prot_vocab)
-        # flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
 
         # For searching over multiple seeds
         hparam_search = None
@@ -588,12 +586,7 @@ def main(flags):
                         "gnn": "GNN"}.get(cview)
             data_dict[cview] = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict[cview] = data_dict[cview][2]
-
-            # Fingerprint dict for GNN if available
-            if flags["gnnet_fingerprint"] is not None:
-                flags["gnn_fingerprint"] = load_pickle(file_name=flags["gnnet_fingerprint"])
-            else:
-                flags["gnn_fingerprint"] = None
+            flags["gnn_fingerprint"] = data_dict[cview][3]
 
             tasks = data_dict[cview][0]
             # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
@@ -659,7 +652,7 @@ def main(flags):
                              prot_profile, summary_writer_creator)
 
         # save simulation data resource tree to file.
-        sim_data.to_json(path="./analysis/")
+        # sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
@@ -976,11 +969,6 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--gnnet_fingerprint",
-                        default=None,
-                        type=str,
-                        help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
-                             "neighbors")
 
     args = parser.parse_args()
 
@@ -1008,6 +996,5 @@ if __name__ == '__main__':
     FLAGS["views"] = [(cv, pv) for cv, pv in zip(args.comp_view, args.prot_view)]
     FLAGS["eval"] = args.eval
     FLAGS["eval_model_name"] = args.eval_model_name
-    FLAGS["gnnet_fingerprint"] = args.gnnet_fingerprint
 
     main(flags=FLAGS)

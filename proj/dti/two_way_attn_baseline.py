@@ -45,11 +45,11 @@ from jova.utils.train_helpers import count_parameters, FrozenModels
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [8, 64]
-# seeds = [123, 124, 125]
+# seeds = [1, 8, 64]
+seeds = [123, 124, 125]
 check_data = False
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 use_weave = False
 use_gconv = True
@@ -158,7 +158,7 @@ def create_integrated_net(hparams, protein_profile):
     return model, frozen_models
 
 
-class IntegratedViewDTI(Trainer):
+class TwoWayAttnBaseline(Trainer):
 
     @staticmethod
     def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, cuda_devices=None,
@@ -240,7 +240,10 @@ class IntegratedViewDTI(Trainer):
             valid_dataset = DtiDataset(x_s=[data[1][fold][1].X for data in data_dict.values()],
                                        y_s=[data[1][fold][1].y for data in data_dict.values()],
                                        w_s=[data[1][fold][1].w for data in data_dict.values()])
-            data = {"train": train_dataset, "val": valid_dataset, "test": None}
+            test_dataset = DtiDataset(x_s=[data[1][fold][2].X for data in data_dict.values()],
+                                      y_s=[data[1][fold][2].y for data in data_dict.values()],
+                                      w_s=[data[1][fold][2].w for data in data_dict.values()])
+            data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset}
         return data
 
     @staticmethod
@@ -256,8 +259,9 @@ class IntegratedViewDTI(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, model, optimizer, data_loaders, metrics, prot_model_type, frozen_models, transformers_dict,
-              prot_desc_dict, tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None):
+    def train(model, optimizer, data_loaders, metrics, prot_model_type, frozen_models, transformers_dict,
+              prot_desc_dict, tasks, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None,
+              is_hsearch=False):
         start = time.time()
         best_model_wts = model.state_dict()
         best_score = -10000
@@ -292,7 +296,7 @@ class IntegratedViewDTI(Trainer):
                 if terminate_training:
                     print("Terminating training...")
                     break
-                for phase in ["train", "val"]:
+                for phase in ["train", "val" if is_hsearch else "test"]:
                     if phase == "train":
                         print("Training....")
                         # Training mode
@@ -374,8 +378,8 @@ class IntegratedViewDTI(Trainer):
                         else:
                             if str(loss.item()) != "nan":  # useful in hyperparameter search
                                 eval_dict = {}
-                                score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
-                                                transformers_dict[list(Xs.keys())[0]])
+                                score = TwoWayAttnBaseline.evaluate(eval_dict, y, outputs, w, metrics, tasks,
+                                                                    transformers_dict[list(Xs.keys())[0]])
                                 # for epoch stats
                                 epoch_scores.append(score)
 
@@ -421,10 +425,10 @@ class IntegratedViewDTI(Trainer):
             model.load_state_dict(best_model_wts)
         except RuntimeError as e:
             print(str(e))
-        return model, best_score, best_epoch
+        return {'model': model, 'score': best_score, 'epoch': best_epoch}
 
     @staticmethod
-    def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
+    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
                        tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
         model.load_state_dict(io.load_model(model_dir, model_name))
@@ -453,7 +457,7 @@ class IntegratedViewDTI(Trainer):
         # Main evaluation loop
         for epoch in range(n_epochs):
 
-            for phase in ["val"]:  # ["train", "val"]:
+            for phase in ["test"]:  # ["train", "val"]:
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
@@ -493,7 +497,8 @@ class IntegratedViewDTI(Trainer):
                             undo_transforms(y_true, transformers_dict["gconv"]).astype(np.float).squeeze().tolist())
 
                     eval_dict = {}
-                    score = eval_fn(eval_dict, y_true, y_predicted, w, metrics, tasks, transformers_dict["gconv"])
+                    score = TwoWayAttnBaseline.evaluate(eval_dict, y_true, y_predicted, w, metrics, tasks,
+                                                        transformers_dict["gconv"])
 
                     # for sim data resource
                     scores_lst.append(score)
@@ -573,7 +578,7 @@ def main(flags):
 
         tasks = data_dict[list(data_dict.keys())[0]][0]
 
-        trainer = IntegratedViewDTI()
+        trainer = TwoWayAttnBaseline()
 
         if flags["cv"]:
             k = flags["fold_num"]
@@ -598,6 +603,7 @@ def main(flags):
                 extra_train_args = {"transformers_dict": transformers_dict,
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
+                                    "is_hsearch": True,
                                     "n_iters": 3000}
 
                 hparams_conf = get_hparam_config(flags)
@@ -612,7 +618,6 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               eval_fn=trainer.evaluate,
                                                save_model_fn=io.save_model,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
@@ -664,14 +669,15 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                                         test_dataset=data["test"],
                                                         protein_profile=protein_profile)
     if flags["eval"]:
-        trainer.evaluate_model(trainer.evaluate, model[0], flags["model_dir"], flags["eval_model_name"],
+        trainer.evaluate_model(model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict, prot_desc_dict,
                                tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_type,
-                                            frozen_models, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
-                                            sim_data_node=sim_data_node)
+        results = trainer.train(model, optimizer, data_loaders, metrics, prot_model_type,
+                                frozen_models, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
+                                sim_data_node=sim_data_node)
+        model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
@@ -915,11 +921,6 @@ if __name__ == '__main__':
                         type=str,
                         help='A resource containing all N-gram segments/words constructed from the protein sequences.'
                         )
-    # parser.add_argument('--prot_embeddings',
-    #                     type=str,
-    #                     dest="protein_embeddings",
-    #                     help='Numpy array file containing the pretrained protein "words" embeddings'
-    #                     )
     parser.add_argument('--no_reload',
                         action="store_false",
                         dest='reload',
@@ -943,11 +944,6 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--fingerprint",
-                        default=None,
-                        type=str,
-                        help="The pickled python dictionary containing the fingerprint profiles of atoms and their"
-                             "neighbors")
 
     args = parser.parse_args()
     flags = Flags()

@@ -444,7 +444,7 @@ class IVPGAN(Trainer):
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
         generator.load_state_dict(best_model_wts)
-        return generator, best_score, best_epoch
+        return {'model': generator, 'score': best_score, 'epoch': best_epoch}
 
     @staticmethod
     def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,

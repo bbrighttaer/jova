@@ -11,13 +11,15 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import re
+import time
 
 import numpy as np
 import pandas as pd
 import torch
 from padme.feat.mol_graphs import ConvMol
 from torch.utils.data import dataset as ds
-
+from rdkit import Chem
+from rdkit.Chem import DataStructs
 from jova import cuda as _cuda
 from jova.molnet.load_function.davis_dataset import load_davis
 from jova.molnet.load_function.kiba_dataset import load_kiba
@@ -73,21 +75,22 @@ def load_dti_data(featurizer, dataset, prot_seq_dict, input_protein=True, cross_
 
     if cross_validation:
         test = False
-    tasks, all_dataset, transformers = loading_functions[dataset](featurizer=featurizer,
-                                                                  cross_validation=cross_validation,
-                                                                  test=test, split=split, reload=reload,
-                                                                  K=fold_num, mode=mode,
-                                                                  predict_cold=predict_cold,
-                                                                  cold_drug=cold_drug,
-                                                                  cold_target=cold_target,
-                                                                  cold_drug_cluster=cold_drug_cluster,
-                                                                  split_warm=split_warm,
-                                                                  prot_seq_dict=prot_seq_dict,
-                                                                  filter_threshold=filter_threshold,
-                                                                  input_protein=input_protein,
-                                                                  currdir=data_dir,
-                                                                  seed=seed, )
-    return tasks, all_dataset, transformers
+    tasks, all_dataset, transformers, fp, kernel_dicts = loading_functions[dataset](featurizer=featurizer,
+                                                                                    cross_validation=cross_validation,
+                                                                                    test=test, split=split,
+                                                                                    reload=reload,
+                                                                                    K=fold_num, mode=mode,
+                                                                                    predict_cold=predict_cold,
+                                                                                    cold_drug=cold_drug,
+                                                                                    cold_target=cold_target,
+                                                                                    cold_drug_cluster=cold_drug_cluster,
+                                                                                    split_warm=split_warm,
+                                                                                    prot_seq_dict=prot_seq_dict,
+                                                                                    filter_threshold=filter_threshold,
+                                                                                    input_protein=input_protein,
+                                                                                    currdir=data_dir,
+                                                                                    seed=seed, )
+    return tasks, all_dataset, transformers, fp, kernel_dicts
 
 
 def load_proteins(prot_desc_path):
@@ -378,3 +381,60 @@ def get_data(featurizer, flags, prot_sequences, seed):
                              filter_threshold=flags["filter_threshold"], )
     finally:
         print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset']))
+
+
+def compute_similarity_kernel_matrices(dataset):
+    """
+    Computes the drug-drug and protein-protein kernel matrices for kernel-based methods (e.g. Kron-RLS)
+
+    :param dataset:
+    :return: tuple
+    """
+    start = time.time()
+    print("About to compute kernel matrices")
+    all_comps = set()
+    all_prots = set()
+    for idx, pair in enumerate(dataset.X):
+        mol, prot = pair
+        all_comps.add(mol)
+        all_prots.add(prot)
+
+    # compounds / drugs
+    comps_mat = {}
+    for c1 in all_comps:
+        fp1 = c1.fingerprint
+        for c2 in all_comps:
+            fp2 = c2.fingerprint
+            score = DataStructs.TanimotoSimilarity(fp1, fp2)
+            comps_mat[Pair(c1, c2)] = score
+
+    # proteins / targets
+    prots_mat = {}
+    for p1 in all_prots:
+        seq1 = p1.sequence
+        for p2 in all_prots:
+            seq2 = p2.sequence
+            score = 0
+            prots_mat[Pair(p1, p2)] = score
+
+    print("Kernel entities: Drugs={}, Prots={}".format(len(all_comps), len(all_prots)))
+    duration = time.time() - start
+    print("Kernel matrices computation finished in: {:.0f}m {:.0f}s".format(duration // 60, duration % 60))
+    return comps_mat, prots_mat
+
+
+class Pair(object):
+    """
+    Order-invariant pair.
+    """
+
+    def __init__(self, p1, p2):
+        self.p1 = p1
+        self.p2 = p2
+
+    def __eq__(self, other):
+        assert isinstance(other, Pair)
+        return (hash(self.p1) + hash(self.p2)) == (hash(other.p1) + hash(other.p2))
+
+    def __hash__(self):
+        return hash(self.p1) + hash(self.p2)

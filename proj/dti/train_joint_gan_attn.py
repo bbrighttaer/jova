@@ -57,11 +57,11 @@ check_data = False
 
 torch.cuda.set_device(0)
 
-use_ecfp8 = True
+use_ecfp8 = False
 use_weave = False
-use_gconv = True
+use_gconv = False
 use_prot = True
-use_gnn = False
+use_gnn = True
 
 
 def create_ecfp_net(hparams):
@@ -263,7 +263,7 @@ def create_discriminator_net(hparams):
     return model
 
 
-class IntegratedViewDTI(Trainer):
+class JovaGAN(Trainer):
 
     @staticmethod
     def initialize(hparams, train_dataset, val_dataset, test_dataset, protein_profile, protein_embeddings,
@@ -782,6 +782,7 @@ def main(flags):
         transformers_dict = dict()
 
         # Data
+        flags["gnn_fingerprint"] = None
         if use_ecfp8:
             data_dict["ecfp8"] = get_data("ECFP8", flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict["ecfp8"] = data_dict["ecfp8"][2]
@@ -794,18 +795,13 @@ def main(flags):
         if use_gnn:
             data_dict["gnn"] = get_data("GNN", flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict["gnn"] = data_dict["gnn"][2]
+            flags["gnn_fingerprint"] = data_dict["gnn"][3]
 
         tasks = data_dict[list(data_dict.keys())[0]][0]
         # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
         flags["tasks"] = tasks
 
-        # Fingerprint dict for GNN if available
-        if use_gnn and flags.gnnet_fingerprint is not None:
-            flags["gnn_fingerprint"] = load_pickle(file_name=flags.gnnet_fingerprint)
-        else:
-            flags["gnn_fingerprint"] = None
-
-        trainer = IntegratedViewDTI()
+        trainer = JovaGAN()
 
         if flags["cv"]:
             k = flags["fold_num"]
@@ -1212,11 +1208,6 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--gnnet_fingerprint",
-                        default=None,
-                        type=str,
-                        help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
-                             "neighbors")
 
     args = parser.parse_args()
     flags = Flags()

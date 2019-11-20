@@ -44,11 +44,11 @@ from jova.utils.train_helpers import count_parameters, FrozenModels
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [1, 8, 64]
-seeds = [1]
+seeds = [1, 8, 64]
+
 # seeds = [123, 124, 125]
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(3)
 
 
 def create_ecfp_net(hparams):
@@ -244,7 +244,10 @@ class CPIBaseline(Trainer):
             valid_dataset = DtiDataset(x_s=[data[1][fold][1].X for data in data_dict.values()],
                                        y_s=[data[1][fold][1].y for data in data_dict.values()],
                                        w_s=[data[1][fold][1].w for data in data_dict.values()])
-            data = {"train": train_dataset, "val": valid_dataset, "test": None}
+            test_dataset = DtiDataset(x_s=[data[1][fold][2].X for data in data_dict.values()],
+                                      y_s=[data[1][fold][2].y for data in data_dict.values()],
+                                      w_s=[data[1][fold][2].w for data in data_dict.values()])
+            data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset}
         return data
 
     @staticmethod
@@ -259,8 +262,8 @@ class CPIBaseline(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, model, optimizer, data_loaders, metrics, frozen_models, transformers_dict, prot_desc_dict, tasks,
-              view_lbl, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None):
+    def train(model, optimizer, data_loaders, metrics, frozen_models, transformers_dict, prot_desc_dict, tasks,
+              view_lbl, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None, is_hsearch=False):
         start = time.time()
         best_model_wts = model.state_dict()
         best_score = -10000
@@ -288,7 +291,7 @@ class CPIBaseline(Trainer):
                 if terminate_training:
                     print("Terminating training...")
                     break
-                for phase in ["train", "val"]:
+                for phase in ["train", "val" if is_hsearch else "test"]:
                     # ensure these models are frozen at all times
                     for m in frozen_models:
                         m.eval()
@@ -351,7 +354,8 @@ class CPIBaseline(Trainer):
                         else:
                             if str(loss.item()) != "nan":  # useful in hyperparameter search
                                 eval_dict = {}
-                                score = eval_fn(eval_dict, y, outputs, w, metrics, tasks, transformers_dict[view_lbl])
+                                score = CPIBaseline.evaluate(eval_dict, y, outputs, w, metrics, tasks,
+                                                             transformers_dict[view_lbl])
                                 # for epoch stats
                                 epoch_scores.append(score)
 
@@ -394,10 +398,10 @@ class CPIBaseline(Trainer):
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
         model.load_state_dict(best_model_wts)
-        return model, best_score, best_epoch
+        return {'model': model, 'score': best_score, 'epoch': best_epoch}
 
     @staticmethod
-    def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
+    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
                        tasks, view, sim_data_node=None):
         # load saved model and put in evaluation mode
         model.load_state_dict(load_model(model_dir, model_name))
@@ -451,7 +455,8 @@ class CPIBaseline(Trainer):
                                                          transformers_dict[view]).astype(np.float).squeeze().tolist())
 
                     eval_dict = {}
-                    score = eval_fn(eval_dict, y_true, y_predicted, w, metrics, tasks, transformers_dict[view])
+                    score = CPIBaseline.evaluate(eval_dict, y_true, y_predicted, w, metrics, tasks,
+                                                 transformers_dict[view])
 
                     # for sim data resource
                     scores_lst.append(score)
@@ -561,6 +566,7 @@ def main(flags):
                                     "prot_desc_dict": prot_desc_dict,
                                     "tasks": tasks,
                                     "n_iters": 3000,
+                                    "is_hsearch": True,
                                     "view_lbl": view}
 
                 hparams_conf = get_hparam_config(flags, view)
@@ -574,7 +580,6 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               eval_fn=trainer.evaluate,
                                                save_model_fn=io.save_model,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
@@ -587,7 +592,7 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30,
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20,
                                           seed=seed, verbose=True)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
@@ -626,14 +631,15 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                                                                 test_dataset=data["test"],
                                                                                 protein_profile=prot_profile)
     if flags["eval"]:
-        trainer.evaluate_model(trainer.evaluate, model, flags["model_dir"], flags["eval_model_name"],
+        trainer.evaluate_model(model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
                                prot_desc_dict, tasks, view=view, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, frozen_models,
-                                            transformers_dict, prot_desc_dict, tasks, n_iters=10000, view_lbl=view,
-                                            sim_data_node=sim_data_node)
+        results = trainer.train(model, optimizer, data_loaders, metrics, frozen_models,
+                                transformers_dict, prot_desc_dict, tasks, n_iters=10000, view_lbl=view,
+                                sim_data_node=sim_data_node)
+        model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
