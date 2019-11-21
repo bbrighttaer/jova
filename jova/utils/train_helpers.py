@@ -313,7 +313,46 @@ def create_torch_embeddings(frozen_models_hook, np_embeddings):
     padded_embeddings = F.pad(pretrained_embeddings, (0, 0, 0, 1))
     shape = padded_embeddings.shape
     pt_embeddings = torch.nn.Embedding(num_embeddings=shape[0], embedding_dim=shape[1],
-                                       _weight=padded_embeddings, padding_idx=shape[0]-1)
+                                       _weight=padded_embeddings, padding_idx=shape[0] - 1)
     if frozen_models_hook:
         frozen_models_hook.add_model(pt_embeddings)
     return pt_embeddings
+
+
+class ViewsReg(object):
+    """
+    Used to manage all views active in a simulation.
+    The format for joint-views arg to be passed is:
+    comp1-compN__prot1-protN (note the double underscore)
+    For instance, for a combination of the PSC and RNN protein views with ECFP8 and GraphConv views of a compound, the
+    argument would be:
+    ecfp8-gconv__psc-rnn
+    """
+    # targets
+    pcnn_views = ['pcnn', 'pcnn2d']
+    embedding_based_views = ['rnn', 'p2v'] + pcnn_views
+    all_prot_views = ['psc'] + embedding_based_views
+
+    # compounds
+    graph_based_views = ['weave', 'gconv', 'gnn']
+    all_comp_views = ['ecfp8'] + graph_based_views
+
+    def __init__(self):
+        self.c_views = []
+        self.p_views = []
+        self.feat_dict = {'ecfp8': 'ECFP8', 'weave': 'Weave', 'gconv': 'GraphConv', 'gnn': 'GNN'}
+
+    def parse_views(self, jova_arg):
+        """
+        Sets the active protein and compound views of the registry
+
+        :param jova_arg: str
+            A set of view combinations for model training/simulation.
+        """
+        assert isinstance(jova_arg, str)
+        self.c_views, self.p_views = [[v for v in seg.split('-')] for seg in jova_arg.split('__')]
+        for v in self.c_views + self.p_views:
+            all = self.all_comp_views + self.all_prot_views
+            assert (v in all), "{} not in {}".format(v, str(all))
+
+

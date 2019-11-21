@@ -30,6 +30,7 @@ from jova.molnet.load_function.tc_dataset import load_toxcast
 from jova.molnet.load_function.tc_full_kinase_datasets import load_tc_full_kinases
 from jova.molnet.load_function.tc_kinase_datasets import load_tc_kinases
 from jova.utils.math import block_diag_irregular
+from jova.utils.train_helpers import ViewsReg
 
 
 def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
@@ -438,3 +439,25 @@ class Pair(object):
 
     def __hash__(self):
         return hash(self.p1) + hash(self.p2)
+
+
+def featurize_datasets(jova_args, feat_dict, flags, prot_seq_dict, seeds):
+    """
+    Ensures all possible compound views that would be used are featurized for every seed.
+
+    :param feat_dict:
+    :param flags:
+    :param seeds:
+    :param prot_seq_dict:
+    :param jova_args:
+    :return:
+    """
+    for seed in seeds:
+        comp_views = set()
+        for arg in jova_args:
+            dummy = ViewsReg()
+            dummy.parse_views(arg)
+            for cv in dummy.c_views:
+                comp_views.add(cv)
+        for v in comp_views:
+            get_data(feat_dict[v], flags, prot_sequences=prot_seq_dict, seed=seed)

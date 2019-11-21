@@ -650,7 +650,7 @@ def main(flags):
                              sim_label, summary_writer_creator)
 
     # save simulation data resource tree to file.
-    sim_data.to_json(path="./analysis/")
+    # sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, tb_writer, view):

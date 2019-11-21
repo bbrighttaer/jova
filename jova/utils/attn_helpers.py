@@ -99,7 +99,7 @@ class UnimodalAttentionData(object):
 
 class MultimodalAttentionData(object):
     def __init__(self):
-        self._labels = []
+        self.labels = []
         self._data_xs = {}
         self._registry = []
         self._protein_profile = None
@@ -149,7 +149,7 @@ class MultimodalAttentionData(object):
         wts_lst = torch.split(wts, num_segs, 1)
 
         # record unimodal attention data
-        for lbl, un_x, un_x_prime, un_wts in zip(self._labels, xs, x_primes, wts_lst):
+        for lbl, un_x, un_x_prime, un_wts in zip(self.labels, xs, x_primes, wts_lst):
             unimodal_attn_data = UnimodalAttentionData(lbl, self._data_xs[lbl], self.protein_sequences,
                                                        self.protein_profile, self.protein_vocabulary,
                                                        layer_num, un_x, un_x_prime, un_wts)

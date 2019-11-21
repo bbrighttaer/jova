@@ -32,6 +32,7 @@ from tqdm import tqdm
 import jova.metrics as mt
 from jova import cuda
 from jova.data import batch_collator, get_data, load_proteins, DtiDataset
+from jova.data.data import featurize_datasets
 from jova.metrics import compute_model_performance
 from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather2D, Unsqueeze, ElementwiseBatchNorm
 from jova.nn.models import GraphConvSequential, create_fcn_layers, NwayForward, JointAttention, \
@@ -42,7 +43,7 @@ from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
 from jova.utils.sim_data import DataNode
 from jova.utils.tb import TBMeanTracker
-from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels
+from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels, ViewsReg
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filename='error.log')
 
@@ -57,11 +58,7 @@ check_data = False
 
 torch.cuda.set_device(0)
 
-use_ecfp8 = False
-use_weave = False
-use_gconv = False
-use_prot = True
-use_gnn = True
+views_reg = ViewsReg()
 
 
 def create_ecfp_net(hparams):
@@ -74,8 +71,8 @@ def create_prot_net(hparams, model_type, protein_profile, protein_embeddings, fr
     # assert protein_embeddings is not None, "Pre-trained protein embeddings are required"
 
     # model_type = hparams["prot"]["model_type"].lower()
-    valid_opts = ["rnn", "psc", "p2v", "pcnn", "pcnn2d"]
-    assert (model_type in valid_opts), "Valid protein types: {}".format(str(valid_opts))
+    assert (model_type in ViewsReg.all_prot_views), "Valid protein types: {}".format(
+        str(ViewsReg.all_prot_views))
     if model_type == "rnn":
         # pt_embeddings = create_torch_embeddings(frozen_models_hook, protein_embeddings)
         model = nn.Sequential(Prot2Vec(protein_profile=protein_profile,
@@ -195,19 +192,15 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
     views = {}
     seg_dims = []
 
+    net_creators = {'ecfp8': create_ecfp_net,
+                    'weave': create_weave_net,
+                    'gconv': create_gconv_net,
+                    'gnn': create_gnn_net}
+
     # compound models
-    if use_ecfp8:
-        views["ecfp8"] = create_ecfp_net(hparams)
-        seg_dims.append(hparams["ecfp8"]["dim"])
-    if use_weave:
-        views["weave"] = create_weave_net(hparams)
-        seg_dims.append(hparams["weave"]["dim"])
-    if use_gconv:
-        views["gconv"] = create_gconv_net(hparams)
-        seg_dims.append(hparams["gconv"]["dim"])
-    if use_gnn:
-        views["gnn"] = create_gnn_net(hparams)
-        seg_dims.append(hparams["gnn"]["dim"])
+    for cview in views_reg.c_views:
+        views[cview] = net_creators[cview](hparams)
+        seg_dims.append(hparams[cview]["dim"])
 
     # protein models
     for m_type in hparams["prot"]["model_types"]:
@@ -377,9 +370,9 @@ class JovaGAN(Trainer):
         return score
 
     @staticmethod
-    def train(eval_fn, models, optimizers, data_loaders, metrics, prot_model_types, weighted_loss, neigh_dist,
+    def train(models, optimizers, data_loaders, metrics, prot_model_types, weighted_loss, neigh_dist,
               frozen_models, transformers_dict, prot_desc_dict, tasks, n_iters=5000, sim_data_node=None,
-              epoch_ckpt=(2, 1.0), tb_writer=None):
+              epoch_ckpt=(2, 1.0), tb_writer=None, is_hsearch=False):
         generator, discriminator = models
         optimizer_gen, optimizer_disc = optimizers
 
@@ -427,7 +420,7 @@ class JovaGAN(Trainer):
                 if terminate_training:
                     print("Terminating training...")
                     break
-                for phase in ["train", "val"]:
+                for phase in ["train", "val" if is_hsearch else "test"]:
                     # ensure these models are frozen at all times
                     for m in frozen_models:
                         m.eval()
@@ -451,11 +444,9 @@ class JovaGAN(Trainer):
                     with TBMeanTracker(tb_writer, 10) as tracker:
                         with grad_stats:
                             for batch in tqdm(data_loaders[phase]):
-                                batch_size, data = batch_collator(batch, prot_desc_dict, spec={"ecfp8": use_ecfp8,
-                                                                                               "weave": use_weave,
-                                                                                               "gconv": use_gconv,
-                                                                                               "gnn": use_gnn},
-                                                                  cuda_prot=True)
+                                spec = {v: True for v in views_reg.c_views}
+                                batch_size, data = batch_collator(batch, prot_desc_dict, spec, cuda_prot=True)
+
                                 # organize the data for each view.
                                 Xs = {}
                                 Ys = {}
@@ -487,20 +478,13 @@ class JovaGAN(Trainer):
                                     # protein data in batch
                                     protein_xs = []
                                     for m_type in prot_model_types:
-                                        if m_type in ["p2v", "rnn", "pcnn", "pcnn2d"]:
+                                        if m_type in views_reg.embedding_based_views:
                                             protein_xs.append(Xs[list(Xs.keys())[0]][2])
-                                        elif m_type == "psc":
+                                        else:  # m_type == "psc":
                                             protein_xs.append(Xs[list(Xs.keys())[0]][1])
 
-                                    X = []
-                                    if use_ecfp8:
-                                        X.append(Xs["ecfp8"][0])
-                                    if use_weave:
-                                        X.append(Xs["weave"][0])
-                                    if use_gconv:
-                                        X.append(Xs["gconv"][0])
-                                    if use_gnn:
-                                        X.append(Xs["gnn"][0])
+                                    # compound data in batch
+                                    X = [Xs[v][0] for v in views_reg.c_views]
 
                                     # merge compound and protein list
                                     X = X + protein_xs
@@ -518,14 +502,21 @@ class JovaGAN(Trainer):
                                     outputs = outputs * weights
                                     pred_loss = prediction_criterion(outputs, target)
 
-                                    # (Hyperparameter search hack - avoids problems with BCE criterion receiving nans.
-                                    if str(pred_loss.item()) == "nan":
-                                        terminate_training = True
-                                        break
+                                # fail fast
+                                if str(pred_loss.item()) == "nan":
+                                    terminate_training = True
+                                    break
+
+                                eval_dict = {}
+                                score = JovaGAN.evaluate(eval_dict, y, outputs, w, metrics, tasks,
+                                                         transformers_dict[list(Xs.keys())[0]])
+                                # TBoard info
+                                tracker.track("%s/loss" % phase, pred_loss.item(), tb_idx.IncAndGet())
+                                tracker.track("%s/score" % phase, score, tb_idx.i)
+                                for k in eval_dict:
+                                    tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx.i)
 
                                 if phase == "train":
-                                    tracker.track("train/train_pred_loss", pred_loss.item(), tb_idx.IncAndGet())
-
                                     # GAN stuff
                                     f_xx, f_yy = torch.meshgrid(outputs.squeeze(), outputs.squeeze())
                                     predicted_diffs = torch.abs(f_xx - f_yy).sort(dim=1)[0][:, : neigh_dist]
@@ -536,8 +527,8 @@ class JovaGAN(Trainer):
                                     gen_loss = adversarial_loss(discriminator(predicted_diffs), valid)
                                     gen_loss_lst.append(gen_loss.item())
                                     loss = pred_loss + weighted_loss * gen_loss
-                                    tracker.track("train/gan/gen_loss", gen_loss.item(), tb_idx.i)
-                                    tracker.track("train/gan/comp_loss", loss.item(), tb_idx.i)
+                                    tracker.track("gan/gen_loss", gen_loss.item(), tb_idx.i)
+                                    tracker.track("train/comp_loss", loss.item(), tb_idx.i)
                                     loss.backward()
                                     optimizer_gen.step()
 
@@ -545,7 +536,7 @@ class JovaGAN(Trainer):
                                     true_loss = adversarial_loss(discriminator(real_diffs), valid)
                                     fake_loss = adversarial_loss(discriminator(predicted_diffs.detach()), fake)
                                     discriminator_loss = (true_loss + fake_loss) / 2.
-                                    tracker.track("train/gan/disc_loss", discriminator_loss.item(), tb_idx.i)
+                                    tracker.track("gan/disc_loss", discriminator_loss.item(), tb_idx.i)
                                     dis_loss_lst.append(discriminator_loss.item())
                                     discriminator_loss.backward()
                                     optimizer_disc.step()
@@ -561,40 +552,23 @@ class JovaGAN(Trainer):
                                                                  pred_loss.item(), discriminator_loss, gen_loss))
 
                                     # monitor train data score
-                                    eval_dict = {}
-                                    score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
-                                                    transformers_dict[list(Xs.keys())[0]])
                                     train_scores_lst.append(score)
-                                    tracker.track("train/score", score, tb_idx.i)
                                 else:
-                                    if str(pred_loss.item()) != "nan":  # useful in hyperparameter search
-                                        tracker.track("val/val_pred_loss", pred_loss.item(), tb_idx.i)
-                                        eval_dict = {}
-                                        score = eval_fn(eval_dict, y, outputs, w, metrics, tasks,
-                                                        transformers_dict[list(Xs.keys())[0]])
+                                    # for epoch stats
+                                    epoch_scores.append(score)
 
-                                        # TBoard info
-                                        tracker.track('val/score', score, tb_idx.i)
-                                        for k in eval_dict:
-                                            tracker.track('val/{}'.format(k), eval_dict[k], tb_idx.i)
-
-                                        # for epoch stats
-                                        epoch_scores.append(score)
-
-                                        # for sim data resource
-                                        val_scores_lst.append(score)
-                                        for m in eval_dict:
-                                            if m in metrics_dict:
-                                                metrics_dict[m].append(eval_dict[m])
-                                            else:
-                                                metrics_dict[m] = [eval_dict[m]]
+                                    # for sim data resource
+                                    val_scores_lst.append(score)
+                                    for m in eval_dict:
+                                        if m in metrics_dict:
+                                            metrics_dict[m].append(eval_dict[m])
+                                        else:
+                                            metrics_dict[m] = [eval_dict[m]]
 
                                         print("\nEpoch={}/{}, batch={}/{}, "
                                               "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
                                                                                         len(data_loaders[phase]),
                                                                                         eval_dict, score))
-                                    else:
-                                        terminate_training = True
 
                                 i += 1
                                 data_size += batch_size
@@ -625,10 +599,10 @@ class JovaGAN(Trainer):
             generator.load_state_dict(best_model_wts)
         except RuntimeError as e:
             print(str(e))
-        return generator, best_score, best_epoch
+        return {'model': generator, 'score': best_score, 'epoch': best_epoch}
 
     @staticmethod
-    def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
+    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
                        tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
         model.load_state_dict(io.load_model(model_dir, model_name))
@@ -697,7 +671,8 @@ class JovaGAN(Trainer):
                             undo_transforms(y_true, transformers_dict["gconv"]).astype(np.float).squeeze().tolist())
 
                     eval_dict = {}
-                    score = eval_fn(eval_dict, y_true, y_predicted, w, metrics, tasks, transformers_dict["gconv"])
+                    score = JovaGAN.evaluate(eval_dict, y_true, y_predicted, w, metrics, tasks,
+                                             transformers_dict["gconv"])
 
                     # for sim data resource
                     scores_lst.append(score)
@@ -720,151 +695,140 @@ class JovaGAN(Trainer):
 
 
 def main(flags):
-    comp_lbl = []
-    if use_ecfp8:
-        comp_lbl.append("ecfp8")
-    if use_weave:
-        comp_lbl.append("weave")
-    if use_gconv:
-        comp_lbl.append("gconv")
-    if use_gnn:
-        comp_lbl.append("gnn")
-    comp_lbl = '_'.join(comp_lbl)
-    flags["prot_model_types"] = ["psc", "rnn"]
-    sim_label = "integrated_view_attn_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
-    print("CUDA={}, view={}".format(cuda, sim_label))
-
-    # Simulation data resource tree
-    split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-        flags["cold_drug"] else "None"
-    dataset_lbl = flags["dataset"]
-    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
-                                         date_label)
-    sim_data = DataNode(label=node_label)
-    nodes_list = []
-    sim_data.data = nodes_list
-
-    num_cuda_dvcs = torch.cuda.device_count()
-    cuda_devices = None if num_cuda_dvcs == 1 else [i for i in range(1, num_cuda_dvcs)]
-
-    # Runtime Protein stuff
+    # Load protein data
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
     prot_profile = load_pickle(file_name=flags.prot_profile)
     prot_vocab = load_pickle(file_name=flags.prot_vocab)
     pretrained_embeddings = None  # load_numpy_array(flags.protein_embeddings)
     flags["prot_vocab_size"] = len(prot_vocab)
-    # flags["embeddings_dim"] =  pretrained_embeddings.shape[-1]
-    # flags["window"] = 11  # window for grouping n-grams of amino acid
 
-    # For searching over multiple seeds
-    hparam_search = None
+    # Ensures all possible compound data in each seed is present. Helps with maintaining the random number generator
+    # state during splitting to avoid sample mismatch across views.
+    featurize_datasets(flags.jova, views_reg.feat_dict, flags, prot_seq_dict, seeds)
 
-    for seed in seeds:
-        summary_writer_creator = lambda: SummaryWriter(log_dir="tb_runs_gan/{}_{}_{}/".format(sim_label, seed,
-                                                                                              dt.now().strftime(
-                                                                                                  "%Y_%m_%d__%H_%M_%S")))
+    print("JOVA sims:", flags.jova)
+    for v_arg in flags.jova:
+        views_reg.parse_views(v_arg)
+        comp_lbl = views_reg.c_views
+        comp_lbl = '_'.join(comp_lbl)
+        flags["prot_model_types"] = views_reg.p_views
+        sim_label = "integrated_view_attn_gan_" + ('_'.join(flags["prot_model_types"])) + '_' + comp_lbl
+        print("CUDA={}, view={}".format(cuda, sim_label))
 
-        # for data collection of this round of simulation.
-        data_node = DataNode(label="seed_%d" % seed)
-        nodes_list.append(data_node)
+        # Simulation data resource tree
+        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
+            flags["cold_drug"] else "None"
+        dataset_lbl = flags["dataset"]
+        node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
+                                             date_label)
+        sim_data = DataNode(label=node_label)
+        nodes_list = []
+        sim_data.data = nodes_list
 
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        num_cuda_dvcs = torch.cuda.device_count()
+        cuda_devices = None if num_cuda_dvcs == 1 else [i for i in range(1, num_cuda_dvcs)]
 
-        # load data
-        print('-------------------------------------')
-        print('Running on dataset: %s' % dataset_lbl)
-        print('-------------------------------------')
+        # For searching over multiple seeds
+        hparam_search = None
 
-        data_dict = dict()
-        transformers_dict = dict()
+        for seed in seeds:
+            summary_writer_creator = lambda: SummaryWriter(log_dir="tb_jovagan"
+                                                                   "/{}_{}_{}/".format(sim_label, seed,
+                                                                                       dt.now().strftime(
+                                                                                           "%Y_%m_%d__%H_%M_%S")))
 
-        # Data
-        flags["gnn_fingerprint"] = None
-        if use_ecfp8:
-            data_dict["ecfp8"] = get_data("ECFP8", flags, prot_sequences=prot_seq_dict, seed=seed)
-            transformers_dict["ecfp8"] = data_dict["ecfp8"][2]
-        if use_weave:
-            data_dict["weave"] = get_data("Weave", flags, prot_sequences=prot_seq_dict, seed=seed)
-            transformers_dict["weave"] = data_dict["weave"][2]
-        if use_gconv:
-            data_dict["gconv"] = get_data("GraphConv", flags, prot_sequences=prot_seq_dict, seed=seed)
-            transformers_dict["gconv"] = data_dict["gconv"][2]
-        if use_gnn:
-            data_dict["gnn"] = get_data("GNN", flags, prot_sequences=prot_seq_dict, seed=seed)
-            transformers_dict["gnn"] = data_dict["gnn"][2]
-            flags["gnn_fingerprint"] = data_dict["gnn"][3]
+            # for data collection of this round of simulation.
+            data_node = DataNode(label="seed_%d" % seed)
+            nodes_list.append(data_node)
 
-        tasks = data_dict[list(data_dict.keys())[0]][0]
-        # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
-        flags["tasks"] = tasks
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
 
-        trainer = JovaGAN()
+            # load data
+            print('-------------------------------------')
+            print('Running on dataset: %s' % dataset_lbl)
+            print('-------------------------------------')
 
-        if flags["cv"]:
-            k = flags["fold_num"]
-            print("{}, {}-Prot: Training scheme: {}-fold cross-validation".format(tasks, sim_label, k))
-        else:
-            k = 1
-            print("{}, {}-Prot: Training scheme: train, validation".format(tasks, sim_label)
-                  + (", test split" if flags['test'] else " split"))
+            data_dict = dict()
+            transformers_dict = dict()
 
-        if check_data:
-            verify_multiview_data(data_dict)
-        else:
-            if flags["hparam_search"]:
-                print("Hyperparameter search enabled: {}".format(flags["hparam_search_alg"]))
+            # Data
+            for cview in views_reg.c_views:
+                data_dict[cview] = get_data(views_reg.feat_dict[cview], flags, prot_sequences=prot_seq_dict, seed=seed)
+                transformers_dict[cview] = data_dict[cview][2]
+                flags["gnn_fingerprint"] = data_dict[cview][3]
 
-                # arguments to callables
-                extra_init_args = {"mode": "regression",
-                                   "cuda_devices": cuda_devices,
-                                   "protein_profile": prot_profile,
-                                   "protein_embeddings": pretrained_embeddings}
-                extra_data_args = {"flags": flags,
-                                   "data_dict": data_dict}
-                total_iterations = 3000
-                extra_train_args = {"transformers_dict": transformers_dict,
-                                    "prot_desc_dict": prot_desc_dict,
-                                    "tasks": tasks,
-                                    "n_iters": total_iterations,
-                                    "tb_writer": summary_writer_creator}
+            tasks = data_dict[list(data_dict.keys())[0]][0]
+            # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
+            flags["tasks"] = tasks
 
-                hparams_conf = get_hparam_config(flags)
-                if hparam_search is None:
-                    search_alg = {"random_search": RandomSearchCV,
-                                  "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
-                                                                            BayesianOptSearchCV)
-                    min_opt = "gp"
-                    hparam_search = search_alg(hparam_config=hparams_conf,
-                                               num_folds=k,
-                                               initializer=trainer.initialize,
-                                               data_provider=trainer.data_provider,
-                                               train_fn=trainer.train,
-                                               eval_fn=trainer.evaluate,
-                                               save_model_fn=io.save_model,
-                                               init_args=extra_init_args,
-                                               data_args=extra_data_args,
-                                               train_args=extra_train_args,
-                                               data_node=data_node,
-                                               split_label=split_label,
-                                               sim_label=sim_label,
-                                               minimizer=min_opt,
-                                               dataset_label=dataset_lbl,
-                                               results_file="{}_{}_dti_{}_{}-{}.csv".format(
-                                                   flags["hparam_search_alg"], sim_label, date_label,
-                                                   total_iterations, min_opt))
+            trainer = JovaGAN()
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
-                print(stats)
-                print("Best params = {}".format(stats.best(m="max")))
+            if flags["cv"]:
+                k = flags["fold_num"]
+                print("{}, {}-Prot: Training scheme: {}-fold cross-validation".format(tasks, sim_label, k))
             else:
-                invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, sim_label,
-                             prot_profile, pretrained_embeddings, summary_writer_creator)
+                k = 1
+                print("{}, {}-Prot: Training scheme: train, validation".format(tasks, sim_label)
+                      + (", test split" if flags['test'] else " split"))
 
-    # save simulation data resource tree to file.
-    # sim_data.to_json(path="./analysis/")
+            if check_data:
+                verify_multiview_data(data_dict)
+            else:
+                if flags["hparam_search"]:
+                    print("Hyperparameter search enabled: {}".format(flags["hparam_search_alg"]))
+
+                    # arguments to callables
+                    extra_init_args = {"mode": "regression",
+                                       "cuda_devices": cuda_devices,
+                                       "protein_profile": prot_profile,
+                                       "protein_embeddings": pretrained_embeddings}
+                    extra_data_args = {"flags": flags,
+                                       "data_dict": data_dict}
+                    total_iterations = 3000
+                    extra_train_args = {"transformers_dict": transformers_dict,
+                                        "prot_desc_dict": prot_desc_dict,
+                                        "tasks": tasks,
+                                        "is_hsearch": True,
+                                        "n_iters": total_iterations,
+                                        "tb_writer": summary_writer_creator}
+
+                    hparams_conf = get_hparam_config(flags)
+                    if hparam_search is None:
+                        search_alg = {"random_search": RandomSearchCV,
+                                      "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
+                                                                                BayesianOptSearchCV)
+                        min_opt = "gp"
+                        hparam_search = search_alg(hparam_config=hparams_conf,
+                                                   num_folds=k,
+                                                   initializer=trainer.initialize,
+                                                   data_provider=trainer.data_provider,
+                                                   train_fn=trainer.train,
+                                                   save_model_fn=io.save_model,
+                                                   init_args=extra_init_args,
+                                                   data_args=extra_data_args,
+                                                   train_args=extra_train_args,
+                                                   data_node=data_node,
+                                                   split_label=split_label,
+                                                   sim_label=sim_label,
+                                                   minimizer=min_opt,
+                                                   dataset_label=dataset_lbl,
+                                                   results_file="{}_{}_dti_{}_{}-{}.csv".format(
+                                                       flags["hparam_search_alg"], sim_label, date_label,
+                                                       total_iterations, min_opt))
+
+                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
+                    print(stats)
+                    print("Best params = {}".format(stats.best(m="max")))
+                else:
+                    invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node,
+                                 sim_label,
+                                 prot_profile, pretrained_embeddings, summary_writer_creator)
+
+        # save simulation data resource tree to file.
+        # sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, protein_profile,
@@ -896,14 +860,15 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                                    protein_profile=protein_profile,
                                                    protein_embeddings=protein_embeddings)
     if flags["eval"]:
-        trainer.evaluate_model(trainer.evaluate, model[0], flags["model_dir"], flags["eval_model_name"],
+        trainer.evaluate_model(model[0], flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
                                prot_desc_dict, tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
-        model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_types,
-                                            weighted_loss, neigh_dist, frozen_models, transformers_dict, prot_desc_dict,
-                                            tasks, n_iters=10000, sim_data_node=sim_data_node, tb_writer=tb_writer)
+        results = trainer.train(model, optimizer, data_loaders, metrics, prot_model_types,
+                                weighted_loss, neigh_dist, frozen_models, transformers_dict, prot_desc_dict,
+                                tasks, n_iters=10000, sim_data_node=sim_data_node, tb_writer=tb_writer)
+        model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
@@ -1015,7 +980,7 @@ def default_hparams_bopt(flags):
             "dim": 1024,
         },
         "gnn": {
-            "fingerprint_size": len(flags["gnn_fingerprint"]) if use_gnn else 0,
+            "fingerprint_size": len(flags["gnn_fingerprint"]) if flags["gnn_fingerprint"] else 0,
             "num_layers": 3,
             "dim": 100,
         }
@@ -1023,7 +988,7 @@ def default_hparams_bopt(flags):
 
 
 def get_hparam_config(flags):
-    return {
+    config = {
         "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
         "attn_layers": DiscreteParam(min=1, max=2),
         "lin_dims": DiscreteParam(min=64, max=1048, size=DiscreteParam(min=1, max=2)),
@@ -1056,27 +1021,39 @@ def get_hparam_config(flags):
             "model_types": ConstantParam(flags["prot_model_types"]),
             "vocab_size": ConstantParam(flags["prot_vocab_size"]),
             "window": ConstantParam(11),
-            # "pcnn_num_layers": DiscreteParam(min=1, max=4),
-            "embedding_dim": DiscreteParam(min=5, max=50),
-            "psc_dim": ConstantParam(8421),
-            "rnn_hidden_state_dim": DiscreteParam(min=5, max=50)
+            "psc_dim": ConstantParam(8421)
         }),
-        "weave": ConstantParam({
-            "dim": DiscreteParam(min=64, max=512),
-            "update_pairs": ConstantParam(False),
-        }),
-        "gconv": DictParam({
-            "dim": ConstantParam(512),
-        }),
-        "ecfp8": DictParam({
-            "dim": ConstantParam(1024),
-        }),
-        "gnn": ConstantParam({
-            "fingerprint_size": ConstantParam(len(flags["gnn_fingerprint"]) if use_gnn else 0),
-            "num_layers": DiscreteParam(1, 4),
-            "dim": DiscreteParam(min=64, max=512),
-        })
+        "ecfp8": DictParam({"dim": ConstantParam(1024)}),
+        "weave": DictParam({}),
+        "gconv": DictParam({}),
+        "gnn": DictParam({})
     }
+
+    # prot additions
+    for pv in views_reg.p_views:
+        # common props
+        if pv in views_reg.embedding_based_views:
+            config["prot"]["embedding_dim"] = DiscreteParam(min=5, max=50)
+
+        # view-specific
+        if pv in views_reg.pcnn_views:
+            config["prot"]["pcnn_num_layers"] = DiscreteParam(min=1, max=4)
+        elif pv == 'rnn':
+            config["prot"]["rnn_hidden_state_dim"] = DiscreteParam(min=5, max=50)
+
+    # comp additions
+    for cv in views_reg.c_views:
+        # common prop
+        if cv in views_reg.graph_based_views:
+            config[cv]["dim"] = DiscreteParam(min=64, max=512)
+
+        # view-specific
+        if cv == "gnn":
+            config[cv]["fingerprint_size"] = ConstantParam(len(flags["gnn_fingerprint"]))
+            config[cv]["num_layers"] = DiscreteParam(1, 4)
+        elif cv == "weave":
+            config[cv]["update_pairs"] = ConstantParam(False)
+    return config
 
 
 def verify_multiview_data(data_dict):
@@ -1208,6 +1185,15 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument("--jova",
+                        action="append",
+                        type=str,
+                        help="A combination of compound and protein views for simulation. "
+                             "The format is: comp1-compN;prot1-protN\nor instance, for a combination "
+                             "of the PSC and RNN protein views with ECFP8 and GraphConv views of a compound, "
+                             "the argument would be:\tecfp8-gconv;psc-rnn\n"
+                             "Available compound views:[ecfp8,weave,gconv,gnn]\n Available protien views:"
+                             "[psc,rnn,p2v,pcnn, pcnn2d]")
 
     args = parser.parse_args()
     flags = Flags()
