@@ -70,6 +70,27 @@ def save_model(model, path, name):
         f.write(name + '\n')
 
 
+def save_dict_model(model, path, name):
+    """
+    Saves the model parameters.
+
+    :param model:
+    :param path:
+    :param name:
+    :return:
+    """
+    os.makedirs(path, exist_ok=True)
+    file = os.path.join(path, name + ".pkl")
+    with open(file, 'wb') as f:
+        pickle.dump(dict(model), f)
+    # with open(os.path.join(path, "dummy_save_dict.txt"), 'a') as f:
+    #     f.write(name + '\n')
+
+
+def load_dict_model(path, name):
+    return load_pickle(os.path.join(path, name))
+
+
 def load_model(path, name, dvc=torch.device("cuda:0")):
     """
     Loads the parameters of a model.

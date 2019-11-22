@@ -355,7 +355,10 @@ class JovaGAN(Trainer):
             valid_dataset = DtiDataset(x_s=[data[1][fold][1].X for data in data_dict.values()],
                                        y_s=[data[1][fold][1].y for data in data_dict.values()],
                                        w_s=[data[1][fold][1].w for data in data_dict.values()])
-            data = {"train": train_dataset, "val": valid_dataset, "test": None}
+            test_dataset = DtiDataset(x_s=[data[1][fold][2].X for data in data_dict.values()],
+                                      y_s=[data[1][fold][2].y for data in data_dict.values()],
+                                      w_s=[data[1][fold][2].w for data in data_dict.values()])
+            data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset}
         return data
 
     @staticmethod
@@ -695,6 +698,8 @@ class JovaGAN(Trainer):
 
 
 def main(flags):
+    print("JOVA sims:", flags.jova)
+
     # Load protein data
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
     prot_profile = load_pickle(file_name=flags.prot_profile)
@@ -705,8 +710,6 @@ def main(flags):
     # Ensures all possible compound data in each seed is present. Helps with maintaining the random number generator
     # state during splitting to avoid sample mismatch across views.
     featurize_datasets(flags.jova, views_reg.feat_dict, flags, prot_seq_dict, seeds)
-
-    print("JOVA sims:", flags.jova)
     for v_arg in flags.jova:
         views_reg.parse_views(v_arg)
         comp_lbl = views_reg.c_views

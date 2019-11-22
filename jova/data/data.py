@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import re
 import time
+from math import sqrt
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ from jova.molnet.load_function.tc_full_kinase_datasets import load_tc_full_kinas
 from jova.molnet.load_function.tc_kinase_datasets import load_tc_kinases
 from jova.utils.math import block_diag_irregular
 from jova.utils.train_helpers import ViewsReg
+from Bio import Align
 
 
 def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
@@ -406,17 +408,23 @@ def compute_similarity_kernel_matrices(dataset):
         fp1 = c1.fingerprint
         for c2 in all_comps:
             fp2 = c2.fingerprint
+            # Tanimoto coefficient
             score = DataStructs.TanimotoSimilarity(fp1, fp2)
             comps_mat[Pair(c1, c2)] = score
 
     # proteins / targets
+    aligner = Align.PairwiseAligner()
+    aligner.mode = 'local'  # SW algorithm
     prots_mat = {}
     for p1 in all_prots:
-        seq1 = p1.sequence
+        seq1 = p1.sequence[1]
+        p1_score = aligner.score(seq1, seq1)
         for p2 in all_prots:
-            seq2 = p2.sequence
-            score = 0
-            prots_mat[Pair(p1, p2)] = score
+            seq2 = p2.sequence[1]
+            p2_score = aligner.score(seq2, seq2)
+            score = aligner.score(seq1, seq2)
+            # Normalized SW score
+            prots_mat[Pair(p1, p2)] = score / (sqrt(p1_score) * sqrt(p2_score))
 
     print("Kernel entities: Drugs={}, Prots={}".format(len(all_comps), len(all_prots)))
     duration = time.time() - start
@@ -435,10 +443,12 @@ class Pair(object):
 
     def __eq__(self, other):
         assert isinstance(other, Pair)
-        return (hash(self.p1) + hash(self.p2)) == (hash(other.p1) + hash(other.p2))
+        # return (hash(self.p1) + hash(self.p2)) == (hash(other.p1) + hash(other.p2))
+        return (self.p1 == other.p1 and self.p2 == other.p2) or (self.p1 == other.p2 and self.p2 == other.p1)
 
     def __hash__(self):
-        return hash(self.p1) + hash(self.p2)
+        h1, h2 = hash(self.p1), hash(self.p2)
+        return hash('{}-{}'.format(min(h1, h2), max(h1, h2)))
 
 
 def featurize_datasets(jova_args, feat_dict, flags, prot_seq_dict, seeds):
