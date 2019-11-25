@@ -88,8 +88,8 @@ class KronRLS(Trainer):
         # Construct Kd and Kt
         train_mol = set()
         train_prot = set()
-        labels = defaultdict(lambda: 0.)
-        weights = defaultdict(lambda: 0.)
+        labels = defaultdict(lambda: float)
+        weights = defaultdict(lambda: float)
         for x, y, w in zip(*data['train']):
             mol, prot = x
             train_mol.add(mol)
@@ -109,10 +109,10 @@ class KronRLS(Trainer):
         pgbar.start()
 
         # Eigen decompositions
-        Lambda, V = np.linalg.eig(Kd)
-        Lambda, V = np.real(Lambda), np.real(V)
-        Sigma, U = np.linalg.eig(Kt)
-        Sigma, U = np.real(Sigma), np.real(U)
+        Lambda, V = np.linalg.eigh(Kd)
+        # Lambda, V = np.real(Lambda), np.real(V)
+        Sigma, U = np.linalg.eigh(Kt)
+        # Sigma, U = np.real(Sigma), np.real(U)
 
         # Compute C
         C = np.kron(np.diag(Lambda), np.diag(Sigma)) + reg_lambda * np.identity(Kd.shape[0] * Kt.shape[0])
@@ -272,7 +272,7 @@ def main(flags):
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label, drug_kernel_dict,
+                invoke_train(trainer, tasks, data, transformer, flags, data_node, (cview, pview), drug_kernel_dict,
                              prot_kernel_dict)
 
         # save simulation data resource tree to file.

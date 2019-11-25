@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import re
 import time
+from collections import defaultdict
 from math import sqrt
 
 import numpy as np
@@ -33,6 +34,7 @@ from jova.molnet.load_function.tc_kinase_datasets import load_tc_kinases
 from jova.utils.math import block_diag_irregular
 from jova.utils.train_helpers import ViewsReg
 from Bio import Align
+import networkx as nx
 
 
 def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
@@ -432,6 +434,99 @@ def compute_similarity_kernel_matrices(dataset):
     return comps_mat, prots_mat
 
 
+def compute_simboost_drug_target_features(dataset, nbins=5, sim_threshold=0.5):
+    """
+    Constructs the type 1,2, and 3 features (with the matrix factorization part) of SimBoost as described in:
+    https://jcheminf.biomedcentral.com/articles/10.1186/s13321-017-0209-z
+    The Matrix Factorization part is deferred to the mf.py script.
+
+    :param sim_threshold:
+    :param nbins:
+    :param dataset:
+    :return:
+    """
+    all_comps = set()
+    all_prots = set()
+    pair_to_value_y = defaultdict(lambda: int())
+    Mgraph = nx.Graph('drug_target_network')
+    Mrows = defaultdict(lambda: list())
+    Mcols = defaultdict(lambda: list())
+    for x, y, w, id in dataset.itersamples():
+        mol, prot = x
+        all_comps.add(mol)
+        all_prots.add(prot)
+        pair_to_value_y[Pair(mol, prot)] = y
+        Mrows[mol].append(y)
+        Mcols[prot].append(y)
+        Mgraph.add_edge(mol, prot, weight=y)
+
+    # compounds / drugs
+    D = {}
+    Dgraph = nx.Graph('drug_drug_network')
+    for c1 in all_comps:
+        fp1 = c1.fingerprint
+        for c2 in all_comps:
+            fp2 = c2.fingerprint
+            # Tanimoto coefficient
+            score = DataStructs.TanimotoSimilarity(fp1, fp2)
+            D[Pair(c1, c2)] = score
+            if score >= sim_threshold:
+                Dgraph.add_edge(c1, c2)
+
+    # proteins / targets
+    aligner = Align.PairwiseAligner()
+    aligner.mode = 'local'  # SW algorithm
+    T = {}
+    Tgraph = nx.Graph('target_target_network')
+    for p1 in all_prots:
+        seq1 = p1.sequence[1]
+        p1_score = aligner.score(seq1, seq1)
+        for p2 in all_prots:
+            seq2 = p2.sequence[1]
+            p2_score = aligner.score(seq2, seq2)
+            score = aligner.score(seq1, seq2)
+            # Normalized SW score
+            normalized_score = score / (sqrt(p1_score) * sqrt(p2_score))
+            T[Pair(p1, p2)] = normalized_score
+            if normalized_score >= sim_threshold:
+                Tgraph.add_edge(p1, p2)
+    return None
+
+
+def compute_type1_features(Mseg, Edict, nbins):
+    """
+    Computes type 1 features of a set of entities (E)
+    :param Mseg:
+    :param Edict:
+    :param nbins:
+    :return:
+        A dict of entity-feature elements
+    """
+    pass
+
+
+def compute_type2_features(type1_feats_dict, Edict, Egraph):
+    """
+    Computes type 2 features of a set of entities whose type 1 features have already been computed.
+    :param type1_feats_dict:
+    :param Edict:
+    :param Egraph:
+    :return:
+        A dict of entity-feature elements
+    """
+    pass
+
+
+def compute_type3_features(Mgraph, pair_to_value_y):
+    """
+    Computes type 3 features for each drug-target pair.
+    :param Mgraph:
+    :param pair_to_value_y:
+    :return:
+    """
+    pass
+
+
 class Pair(object):
     """
     Order-invariant pair.
@@ -443,7 +538,6 @@ class Pair(object):
 
     def __eq__(self, other):
         assert isinstance(other, Pair)
-        # return (hash(self.p1) + hash(self.p2)) == (hash(other.p1) + hash(other.p2))
         return (self.p1 == other.p1 and self.p2 == other.p2) or (self.p1 == other.p2 and self.p2 == other.p1)
 
     def __hash__(self):
