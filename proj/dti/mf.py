@@ -11,28 +11,28 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import os
+import pickle
 import random
 import time
+from collections import defaultdict
 from datetime import datetime as dt
 
 import numpy as np
 import torch
 import torch.optim.lr_scheduler as sch
-from jova.utils.math import ExpAverage
-
-from jova import cuda
-from soek import RealParam
+from soek import RealParam, CategoricalParam, LogRealParam, DiscreteParam
 from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam
 from soek.rand import RandomSearchCV
 
 import jova.metrics as mt
+from jova import cuda
 from jova.data import get_data, load_proteins
 from jova.data.data import Pair
 from jova.metrics import compute_model_performance
 from jova.nn.models import MatrixFactorization
-from jova.utils import Trainer, io
-from jova.utils.io import save_dict_model
+from jova.utils import Trainer
+from jova.utils.math import ExpAverage
 from jova.utils.sim_data import DataNode
 
 currentDT = dt.now()
@@ -90,9 +90,8 @@ class MF(Trainer):
 
     @staticmethod
     def data_provider(fold, flags, data):
-        if not flags['cv']:
-            return {"train": data[1][0], "val": None, "test": None}
-        return None
+        # Assumes no CV
+        return {"train": data[1][0], "val": None, "test": None}
 
     @staticmethod
     def evaluate(eval_dict, y, y_pred, w, metrics, tasks, transformers):
@@ -105,15 +104,15 @@ class MF(Trainer):
         return score
 
     @staticmethod
-    def train(model, optimizer, comps, prots, pair_y, metrics, transformer, tasks, epochs=5000, is_hsearch=False,
-              sim_data_node=None, epoch_ckpt=(2, 1.0)):
+    def train(model, optimizer, comps, prots, pair_y, metrics, transformer, tasks, max_iter=5000, tol=1e-6,
+              is_hsearch=False, sim_data_node=None, epoch_ckpt=(100, 10.0)):
         start = time.time()
         best_model_wts = model.state_dict()
-        best_score = -10000
+        min_error = 10000
         best_epoch = -1
         terminate_training = False
         e_avg = ExpAverage(.01)
-        scheduler = sch.StepLR(optimizer, step_size=400, gamma=0.01)
+        scheduler = sch.StepLR(optimizer, step_size=500, gamma=0.01)
         criterion = torch.nn.MSELoss()
 
         metrics_dict = {}
@@ -121,64 +120,79 @@ class MF(Trainer):
         if sim_data_node:
             sim_data_node.data = [metrics_node]
 
-        epoch_losses = []
-        epoch_scores = []
-        for epoch in range(epochs):
+        labels_dict = defaultdict(lambda: float())
+        labels_dict.update(pair_y)
+
+        M = torch.zeros((len(comps), len(prots)))
+        # mask = torch.zeros_like(M)
+        # Construct matrix
+        for i, c in enumerate(comps):
+            for j, p in enumerate(prots):
+                M[i, j] = float(labels_dict[Pair(c, p)])
+
+        losses = []
+        print('{:<6}\t| {:>10}\t|'.format('Epoch', 'Loss (MSE)'))
+        print('-' * 30)
+        prev_loss = None
+        for epoch in range(max_iter):
             if terminate_training:
                 print("Terminating training...")
                 break
-            for phase in ['train', 'val']:
-                if phase == 'train':
-                    print('Training....')
-                    model.train()
-                else:
-                    print('Validation....')
-                    model.eval()
+            model.train()
 
-                with torch.set_grad_enabled(phase == 'train'):
-                    pass
+            Y_hat = model()
+            loss = criterion(Y_hat, M)
+            print('{:<6}\t| {:>10.4f}\t|'.format(epoch, loss.item()))
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
 
-                if phase == 'train':
-                    pass
-                else:
-                    pass
+            scheduler.step()
+            ep_loss = np.nanmean(losses)
+            e_avg.update(ep_loss)
+            # if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
+            #     if e_avg.value > epoch_ckpt[1]:
+            #         terminate_training = True
 
-            if phase == 'train':
-                scheduler.step()
-                ep_loss = np.nanmean(epoch_losses)
-                e_avg.update(ep_loss)
-                if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
-                    if e_avg.value > epoch_ckpt[1]:
-                        terminate_training = True
+            # Adjust the learning rate.
+            scheduler.step()
 
-                # Adjust the learning rate.
-                scheduler.step()
-                print("\nPhase: {}, avg task loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
-            else:
-                mean_score = np.mean(epoch_scores)
-                if best_score < mean_score:
-                    best_score = mean_score
-                    best_model_wts = copy.deepcopy(model.state_dict())
-                    best_epoch = epoch
+            if min_error > loss.item():
+                min_error = loss.item()
+                best_model_wts = copy.deepcopy(model.state_dict())
+                best_epoch = epoch
 
-
+            if prev_loss is not None and (prev_loss - loss.item()) < tol:
+                terminate_training = True
+            prev_loss = loss.item()
 
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
         model.load_state_dict(best_model_wts)
-        return {'model': model, 'score': best_score, 'epoch': best_epoch}
+
+        # map drug-target features
+        P, Q = model.P.t().numpy(), model.Q.t().numpy()
+        pairwise_vecs = {}
+        for c, v1 in zip(comps, P):
+            for p, v2 in zip(prots, Q):
+                pairwise_vecs[Pair(c, p)] = v1.tolist() + v1.tolist()
+
+        return {'model': (model, pairwise_vecs), 'score': -min_error, 'epoch': best_epoch}
 
     @staticmethod
     def evaluate_model():
         pass
 
 
-def to_numpy(tensor):
-    return tensor.cpu().detach().numpy()
-
-
-def to_tensor(array):
-    return torch.from_numpy(array)
+def save_mf_model_and_feats(mf_objs, path, name):
+    model, pairwise_vecs = mf_objs
+    os.makedirs(path, exist_ok=True)
+    file = os.path.join(path, name + ".mod")
+    torch.save(model.state_dict(), file)
+    # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
+    #     f.write(name + '\n')
+    with open(os.path.join(path, name + '_pairwise_features_dict.pkl'), 'wb') as f:
+        pickle.dump(dict(pairwise_vecs), f)
 
 
 def main(flags):
@@ -214,6 +228,7 @@ def main(flags):
 
             random.seed(seed)
             np.random.seed(seed)
+            torch.manual_seed(seed)
 
             # load data
             print('-------------------------------------')
@@ -223,21 +238,19 @@ def main(flags):
             data_key = {"ecfp4": "MF_ECFP4",
                         "ecfp8": "MF_ECFP8"}.get(cview)
             flags['splitting_alg'] = 'no_split'
+            flags['cv'] = False
+            flags['test'] = False
+            flags['fold_num'] = 1
             data = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
             transformer = data[2]
-            drug_kernel_dict, prot_kernel_dict = data[4]
             tasks = data[0]
             flags["tasks"] = tasks
 
             trainer = MF()
 
-            if flags["cv"]:
-                k = flags["fold_num"]
-                print("{}, {}-{}: Training scheme: {}-fold cross-validation".format(tasks, cview, pview, k))
-            else:
-                k = 1
-                print("{}, {}-{}: Training scheme: train, validation".format(tasks, cview, pview)
-                      + (", test split" if flags['test'] else " split"))
+            k = 1
+            print("{}, {}-{}: Training scheme: train, validation".format(tasks, cview, pview)
+                  + (", test split" if flags['test'] else " split"))
 
             if flags["hparam_search"]:
                 print("Hyperparameter search enabled: {}".format(flags["hparam_search_alg"]))
@@ -248,12 +261,10 @@ def main(flags):
                                    "data": data}
                 n_iters = 3000
                 extra_train_args = {"transformer": transformer,
-                                    "drug_kernel_dict": drug_kernel_dict,
-                                    "prot_kernel_dict": prot_kernel_dict,
                                     "tasks": tasks,
                                     "is_hsearch": True}
 
-                hparams_conf = get_hparam_config(flags, cview, pview)
+                hparams_conf = get_hparam_config(flags)
 
                 if hparam_search is None:
                     search_alg = {"random_search": RandomSearchCV,
@@ -265,7 +276,7 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               save_model_fn=io.save_dict_model,
+                                               save_model_fn=save_mf_model_and_feats,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,
@@ -277,19 +288,18 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt, n_iters))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data, transformer, flags, data_node, (cview, pview), drug_kernel_dict,
-                             prot_kernel_dict)
+                invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label)
 
         # save simulation data resource tree to file.
-        sim_data.to_json(path="./analysis/")
+        # sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, drug_kernel_dict, prot_kernel_dict):
-    hyper_params = default_hparams_bopt(flags, *view)
+def invoke_train(trainer, tasks, data, transformer, flags, data_node, view):
+    hyper_params = default_hparams_bopt(flags)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
         folds_data = []
@@ -298,15 +308,12 @@ def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, drug
         for k in range(flags["fold_num"]):
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
-            start_fold(k_node, data, flags, hyper_params, tasks, trainer, transformer, view, drug_kernel_dict,
-                       prot_kernel_dict, k)
+            start_fold(k_node, data, flags, hyper_params, tasks, trainer, transformer, view)
     else:
-        start_fold(data_node, data, flags, hyper_params, tasks, trainer, transformer, view, drug_kernel_dict,
-                   prot_kernel_dict)
+        start_fold(data_node, data, flags, hyper_params, tasks, trainer, transformer, view)
 
 
-def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transformer, view, drug_kernel_dict,
-               prot_kernel_dict, k=None):
+def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transformer, view, k=None):
     data = trainer.data_provider(k, flags, data)
     model, optimizer, all_comps, all_prots, pair_to_value_y, metrics = trainer.initialize(hparams=hyper_params,
                                                                                           train_dataset=data["train"],
@@ -322,39 +329,36 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transfo
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        save_dict_model(model, flags["model_dir"],
-                        "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], '_'.join(view), flags["model_name"],
-                                                       split_label,
-                                                       epoch, score))
+        save_mf_model_and_feats(model, flags["model_dir"],
+                                "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"],
+                                                               split_label, epoch, score))
 
 
-def default_hparams_rand(flags, comp_view, prot_view):
+def default_hparams_rand(flags):
     return {
-        "reg_lambda": 0.1,
-        "comp_view": comp_view,
-        "prot_view": prot_view
+        "reg_lambda": 0.1
     }
 
 
-def default_hparams_bopt(flags, comp_view, prot_view):
+def default_hparams_bopt(flags):
     return {
-        "reg_lambda": 0.1,
-        "comp_view": comp_view,
-        "prot_view": prot_view,
-        "latent_dim": 10,
+        "latent_dim": 100,
 
         # optimizer params
         "optimizer": "rmsprop",
-        "optimizer__global__weight_decay": 0.0001,
-        "optimizer__global__lr": 0.0001,
+        "optimizer__global__weight_decay": 0.005517384954317297,
+        "optimizer__global__lr": 0.012095108260810254,
     }
 
 
-def get_hparam_config(flags, comp_view, prot_view):
+def get_hparam_config(flags):
     return {
-        "reg_lambda": RealParam(min=0.1),
-        "comp_view": ConstantParam(comp_view),
-        "prot_view": ConstantParam(prot_view)
+        "latent_dim": DiscreteParam(min=10, max=100),
+
+        # optimizer params
+        "optimizer": CategoricalParam(choices=["sgd", "adam", "adadelta", "adagrad", "adamax", "rmsprop"]),
+        "optimizer__global__weight_decay": LogRealParam(),
+        "optimizer__global__lr": LogRealParam(),
     }
 
 
@@ -377,14 +381,6 @@ if __name__ == '__main__':
 
     # Either CV or standard train-val(-test) split.
     scheme = parser.add_mutually_exclusive_group()
-    scheme.add_argument("--fold_num",
-                        default=-1,
-                        type=int,
-                        choices=range(3, 11),
-                        help="Number of folds for cross-validation")
-    scheme.add_argument("--test",
-                        action="store_true",
-                        help="Whether a test set should be included in the data split")
     parser.add_argument('--filter_threshold',
                         type=int,
                         default=6,
@@ -467,6 +463,5 @@ if __name__ == '__main__':
     args_dict = args.__dict__
     for arg in args_dict:
         setattr(flags, arg, args_dict[arg])
-    setattr(flags, "cv", True if flags.fold_num > 2 else False)
     setattr(flags, "views", [(cv, pv) for cv, pv in zip(args.comp_view, args.prot_view)])
     main(flags)

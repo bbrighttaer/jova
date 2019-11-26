@@ -19,7 +19,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
                reload=True, K=5, mode='regression', predict_cold=False, cold_drug=False,
                cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
                prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True, seed=0,
-               gnn_radius=2):
+               gnn_radius=2, simboost_pairwise_feats_dict=None):
     if cross_validation:
         assert not test
     feat_label = featurizer
@@ -110,7 +110,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         drug_sim_kernel_dict, prot_sim_kernel_dict = compute_similarity_kernel_matrices(dataset)
     elif feat_label in ['SB_ECFP8', 'SB_ECFP4']:
         from jova.data.data import compute_simboost_drug_target_features
-        drug_target_features = compute_simboost_drug_target_features(dataset)
+        drug_target_features = compute_simboost_drug_target_features(dataset, simboost_pairwise_feats_dict)
 
     splitters = {
         'no_split': splits.NoSplit(),

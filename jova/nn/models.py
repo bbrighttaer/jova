@@ -1003,8 +1003,16 @@ class MatrixFactorization(nn.Module):
 
     def __init__(self, ncomps, nprots, k=10):
         super(MatrixFactorization, self).__init__()
-        self.P = nn.Parameter(torch.randn(k, ncomps))
-        self.Q = nn.Parameter(torch.randn(k, nprots))
+        self._P = nn.Parameter(torch.randn(k, ncomps))
+        self._Q = nn.Parameter(torch.randn(k, nprots))
+
+    @property
+    def P(self):
+        return self._P.cpu().detach()
+
+    @property
+    def Q(self):
+        return self._Q.cpu().detach()
 
     def forward(self):
-        return self.P.t().mm(self.Q)
+        return self._P.t().mm(self._Q)

@@ -435,7 +435,7 @@ def compute_similarity_kernel_matrices(dataset):
     return comps_mat, prots_mat
 
 
-def compute_simboost_drug_target_features(dataset, nbins=10, sim_threshold=0.5):
+def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim_threshold=0.5):
     """
     Constructs the type 1,2, and 3 features (with the matrix factorization part) of SimBoost as described in:
     https://jcheminf.biomedcentral.com/articles/10.1186/s13321-017-0209-z
@@ -446,6 +446,7 @@ def compute_simboost_drug_target_features(dataset, nbins=10, sim_threshold=0.5):
     :param dataset:
     :return:
     """
+    assert isinstance(pairwise_feats, dict), "Drug-Target features dictionary must be provided."
     pbar = UnboundedProgressbar()
     pbar.start()
 
@@ -506,7 +507,7 @@ def compute_simboost_drug_target_features(dataset, nbins=10, sim_threshold=0.5):
     btw_cent = nx.betweenness_centrality(Mgraph)
     cls_cent = nx.closeness_centrality(Mgraph)
     eig_cent = nx.eigenvector_centrality(Mgraph, tol=1e-3, max_iter=500)
-    pagerank = nx.pagerank(Mgraph)
+    pagerank = nx.pagerank(Mgraph, tol=1e-3, max_iter=1000)
     drug_target_feats_dict = defaultdict(lambda: list())
     max_length = []
     for pair in pair_to_value_y:

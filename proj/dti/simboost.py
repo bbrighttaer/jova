@@ -42,7 +42,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 seeds = [1, 8, 64]
 
 
-class MF(Trainer):
+class SimBoost(Trainer):
 
     @staticmethod
     def initialize(hparams, train_dataset, val_dataset, test_dataset):
@@ -200,7 +200,7 @@ def main(flags):
 
     for view in flags["views"]:
         cview, pview = view
-        sim_label = "MF_{}_{}".format(cview, pview)
+        sim_label = "SimBoost_{}_{}".format(cview, pview)
         print(sim_label)
 
         # Simulation data resource tree
@@ -239,7 +239,7 @@ def main(flags):
             tasks = data[0]
             flags["tasks"] = tasks
 
-            trainer = MF()
+            trainer = SimBoost()
 
             if flags["cv"]:
                 k = flags["fold_num"]
