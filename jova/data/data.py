@@ -67,7 +67,7 @@ def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
 def load_dti_data(featurizer, dataset, prot_seq_dict, input_protein=True, cross_validation=False, test=False,
                   fold_num=5, split='random', reload=True, predict_cold=False, cold_drug=False, cold_target=False,
                   cold_drug_cluster=False, split_warm=False, filter_threshold=0,
-                  mode='regression', data_dir='../../data/', seed=0):
+                  mode='regression', data_dir='../../data/', seed=0, simboost_pairwise_feats_dict=None):
     loading_functions = {
         'davis': load_davis,
         'metz': load_metz,
@@ -81,21 +81,23 @@ def load_dti_data(featurizer, dataset, prot_seq_dict, input_protein=True, cross_
 
     if cross_validation:
         test = False
-    tasks, all_dataset, transformers, fp, kernel_dicts = loading_functions[dataset](featurizer=featurizer,
-                                                                                    cross_validation=cross_validation,
-                                                                                    test=test, split=split,
-                                                                                    reload=reload,
-                                                                                    K=fold_num, mode=mode,
-                                                                                    predict_cold=predict_cold,
-                                                                                    cold_drug=cold_drug,
-                                                                                    cold_target=cold_target,
-                                                                                    cold_drug_cluster=cold_drug_cluster,
-                                                                                    split_warm=split_warm,
-                                                                                    prot_seq_dict=prot_seq_dict,
-                                                                                    filter_threshold=filter_threshold,
-                                                                                    input_protein=input_protein,
-                                                                                    currdir=data_dir,
-                                                                                    seed=seed, )
+    tasks, all_dataset, transformers, \
+    fp, kernel_dicts = loading_functions[dataset](featurizer=featurizer,
+                                                  cross_validation=cross_validation,
+                                                  test=test, split=split,
+                                                  reload=reload,
+                                                  K=fold_num, mode=mode,
+                                                  predict_cold=predict_cold,
+                                                  cold_drug=cold_drug,
+                                                  cold_target=cold_target,
+                                                  cold_drug_cluster=cold_drug_cluster,
+                                                  split_warm=split_warm,
+                                                  prot_seq_dict=prot_seq_dict,
+                                                  filter_threshold=filter_threshold,
+                                                  input_protein=input_protein,
+                                                  currdir=data_dir,
+                                                  seed=seed,
+                                                  simboost_pairwise_feats_dict=simboost_pairwise_feats_dict)
     return tasks, all_dataset, transformers, fp, kernel_dicts
 
 
@@ -363,7 +365,7 @@ def cuda(tensor):
         return tensor
 
 
-def get_data(featurizer, flags, prot_sequences, seed):
+def get_data(featurizer, flags, prot_sequences, seed, simboost_pairwise_feats_dict=None):
     # logger = get_logger(name="Data loader")
     print("--------------About to load {}-{} data-------------".format(featurizer, flags['dataset']))
     try:
@@ -384,7 +386,8 @@ def get_data(featurizer, flags, prot_sequences, seed):
                              cold_drug_cluster=flags['cold_drug_cluster'],
                              split_warm=flags['split_warm'],
                              seed=seed,
-                             filter_threshold=flags["filter_threshold"], )
+                             filter_threshold=flags["filter_threshold"],
+                             simboost_pairwise_feats_dict=simboost_pairwise_feats_dict)
     finally:
         print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset']))
 
@@ -503,16 +506,20 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
     pbar.stop()
     pbar.join()
 
-    # Type 3 features (without MF vectors)
+    # Type 3 features
     btw_cent = nx.betweenness_centrality(Mgraph)
     cls_cent = nx.closeness_centrality(Mgraph)
-    eig_cent = nx.eigenvector_centrality(Mgraph, tol=1e-3, max_iter=500)
-    pagerank = nx.pagerank(Mgraph, tol=1e-3, max_iter=1000)
+    # eig_cent = nx.eigenvector_centrality(Mgraph, tol=1e-3, max_iter=500)
+    # pagerank = nx.pagerank(Mgraph, tol=1e-3, max_iter=1000)
     drug_target_feats_dict = defaultdict(lambda: list())
     max_length = []
     for pair in pair_to_value_y:
         comp, prot = pair.p1, pair.p2
         feat = drug_target_feats_dict[Pair(comp, prot)]
+        # mf
+        mf = pairwise_feats[Pair(comp, prot)]
+        feat.extend(mf)
+
         # d.t.ave
         d_av_lst = []
         for n in Mgraph.neighbors(prot):
@@ -532,12 +539,12 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
         feat.append(btw_cent[prot])
         feat.append(cls_cent[comp])
         feat.append(cls_cent[prot])
-        feat.append(eig_cent[comp])
-        feat.append(eig_cent[prot])
+        # feat.append(eig_cent[comp])
+        # feat.append(eig_cent[prot])
 
         # d.t.pr
-        feat.append(pagerank[comp])
-        feat.append(pagerank[prot])
+        # feat.append(pagerank[comp])
+        # feat.append(pagerank[prot])
 
         # add type 1 features
         feat.extend(comp_feats[comp])

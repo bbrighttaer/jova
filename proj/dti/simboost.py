@@ -32,7 +32,7 @@ from jova.data.data import Pair
 from jova.metrics import compute_model_performance
 from jova.nn.models import MatrixFactorization
 from jova.utils import Trainer, io
-from jova.utils.io import save_dict_model
+from jova.utils.io import save_dict_model, load_dict_model
 from jova.utils.sim_data import DataNode
 
 currentDT = dt.now()
@@ -172,8 +172,6 @@ class SimBoost(Trainer):
                     best_model_wts = copy.deepcopy(model.state_dict())
                     best_epoch = epoch
 
-
-
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
         model.load_state_dict(best_model_wts)
@@ -214,6 +212,7 @@ def main(flags):
         sim_data.data = nodes_list
 
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
+        pairwise_feats_dict = load_dict_model(flags['model_dir'], flags['pairwise_feats_dict'])
 
         # For searching over multiple seeds
         hparam_search = None
@@ -233,7 +232,8 @@ def main(flags):
 
             data_key = {"ecfp4": "SB_ECFP4",
                         "ecfp8": "SB_ECFP8"}.get(cview)
-            data = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
+            data = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed,
+                            simboost_pairwise_feats_dict=pairwise_feats_dict)
             transformer = data[2]
             drug_kernel_dict, prot_kernel_dict = data[4]
             tasks = data[0]
@@ -474,6 +474,10 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument("--pairwise_feats_dict",
+                        type=str,
+                        help="The filename of the Matrix Factorization drug-target features dict to be "
+                             "loaded from the directory specified in --model_dir")
 
     args = parser.parse_args()
 
