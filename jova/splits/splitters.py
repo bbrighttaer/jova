@@ -1648,3 +1648,24 @@ class TimeSplitterPDBbind(Splitter):
 
         return (new_indices[:train_cutoff], new_indices[train_cutoff:valid_cutoff],
                 new_indices[valid_cutoff:])
+
+
+class NoSplit(Splitter):
+    def __init__(self):
+        super(NoSplit, self).__init__()
+
+    def split(self, dataset, frac_train=None, frac_valid=None, frac_test=None, log_every_n=None, verbose=False,
+              seed=None):
+        return dataset
+
+    def k_fold_split(self, dataset, k, directories=None, seed=None, **kwargs):
+        ds = [[None, None, None] for _ in range(k)]
+        ds[0][0] = dataset
+        return ds
+
+    def train_valid_test_split(self, dataset, train_dir=None, valid_dir=None, test_dir=None, frac_train=.8,
+                               frac_valid=.1, frac_test=.1, seed=None, log_every_n=1000, verbose=True):
+        return dataset, None, None
+
+    def train_test_split(self, dataset, train_dir=None, test_dir=None, seed=None, frac_train=.8, verbose=True):
+        return dataset, None

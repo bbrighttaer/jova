@@ -674,7 +674,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     else:
         # Train the model
         model, score, epoch = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics, prot_model_type,
-                                            transformers_dict, prot_desc_dict, tasks, n_iters=10000,
+                                            transformers_dict, prot_desc_dict, tasks, epochs=10000,
                                             sim_data_node=sim_data_node)
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \

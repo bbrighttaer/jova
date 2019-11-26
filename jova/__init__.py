@@ -11,5 +11,5 @@ from __future__ import unicode_literals
 
 from torch.cuda import is_available
 
-allow_cuda = True
+allow_cuda = False
 cuda = is_available() and allow_cuda

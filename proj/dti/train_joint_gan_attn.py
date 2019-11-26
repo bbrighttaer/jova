@@ -56,7 +56,7 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(3)
 
 views_reg = ViewsReg()
 
@@ -822,7 +822,7 @@ def main(flags):
                                                        flags["hparam_search_alg"], sim_label, date_label,
                                                        total_iterations, min_opt))
 
-                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
+                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30, seed=seed)
                     print(stats)
                     print("Best params = {}".format(stats.best(m="max")))
                 else:
@@ -870,7 +870,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, prot_model_types,
                                 weighted_loss, neigh_dist, frozen_models, transformers_dict, prot_desc_dict,
-                                tasks, n_iters=10000, sim_data_node=sim_data_node, tb_writer=tb_writer)
+                                tasks, epochs=10000, sim_data_node=sim_data_node, tb_writer=tb_writer)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \

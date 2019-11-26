@@ -6,4 +6,4 @@ from __future__ import division
 from __future__ import unicode_literals
 
 
-from .splitters import RandomSplitter
+from .splitters import RandomSplitter, NoSplit

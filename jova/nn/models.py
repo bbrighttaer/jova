@@ -994,3 +994,17 @@ class SegmentWiseResBlock(nn.Module):
         x = x + self.seg_lin(x)
         x = self.batch_norm(x.view(num_seg * bsize, d_model)).view(num_seg, bsize, d_model)
         return x
+
+
+class MatrixFactorization(nn.Module):
+    """
+    Matrix Factorization for DTI prediction (baseline and SimBoost component)
+    """
+
+    def __init__(self, ncomps, nprots, k=10):
+        super(MatrixFactorization, self).__init__()
+        self.P = nn.Parameter(torch.randn(k, ncomps))
+        self.Q = nn.Parameter(torch.randn(k, nprots))
+
+    def forward(self):
+        return self.P.t().mm(self.Q)

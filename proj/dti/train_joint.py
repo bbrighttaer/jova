@@ -602,7 +602,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     else:
         # Train the model
         results = trainer.train(trainer.evaluate, model, optimizer, data_loaders, metrics,
-                                transformers_dict, prot_desc_dict, tasks, n_iters=10000,
+                                transformers_dict, prot_desc_dict, tasks, epochs=10000,
                                 sim_data_node=sim_data_node, tb_writer=tb_writer)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.

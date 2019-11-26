@@ -76,9 +76,9 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
     dataset_file = os.path.join(data_dir, file_name)
     if featurizer == 'Weave':
         featurizer = padme.feat.WeaveFeaturizer()
-    elif featurizer in ['ECFP4', 'KRLS_ECFP4', 'SB_ECFP4']:
+    elif featurizer in ['ECFP4', 'KRLS_ECFP4', 'SB_ECFP4', 'MF_ECFP4']:
         featurizer = padme.feat.CircularFingerprint(size=1024, radius=2)
-    elif featurizer in ['ECFP8', 'KRLS_ECFP8', 'SB_ECFP8']:
+    elif featurizer in ['ECFP8', 'KRLS_ECFP8', 'SB_ECFP8', 'MF_ECFP8']:
         featurizer = padme.feat.CircularFingerprint(size=1024, radius=4)
     elif featurizer == 'GraphConv':
         featurizer = padme.feat.ConvMolFeaturizer()
@@ -113,6 +113,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         drug_target_features = compute_simboost_drug_target_features(dataset)
 
     splitters = {
+        'no_split': splits.NoSplit(),
         'index': deepchem.splits.IndexSplitter(),
         'random': splits.RandomSplitter(split_cold=predict_cold, cold_drug=cold_drug,
                                         cold_target=cold_target, cold_drug_cluster=cold_drug_cluster,
