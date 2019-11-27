@@ -9,28 +9,25 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import os
 import argparse
-import copy
+import pickle
 import random
 import time
 from datetime import datetime as dt
 
 import numpy as np
 import torch
-import torch.optim.lr_scheduler as sch
-from jova.utils.math import ExpAverage
-
-from jova import cuda
-from soek import RealParam
+import xgboost as xgb
+from jova.data.data import Pair
+from soek import RealParam, DiscreteParam, LogRealParam
 from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam
 from soek.rand import RandomSearchCV
 
 import jova.metrics as mt
 from jova.data import get_data, load_proteins, DtiDataset
-from jova.data.data import Pair
 from jova.metrics import compute_model_performance
-from jova.nn.models import MatrixFactorization
 from jova.utils import Trainer, io
 from jova.utils.io import save_dict_model, load_dict_model
 from jova.utils.sim_data import DataNode
@@ -46,62 +43,32 @@ class SimBoost(Trainer):
 
     @staticmethod
     def initialize(hparams, train_dataset, val_dataset, test_dataset):
-        model = None
-        # optimizer configuration
-        optimizer = {
-            "adadelta": torch.optim.Adadelta,
-            "adagrad": torch.optim.Adagrad,
-            "adam": torch.optim.Adam,
-            "adamax": torch.optim.Adamax,
-            "asgd": torch.optim.ASGD,
-            "rmsprop": torch.optim.RMSprop,
-            "Rprop": torch.optim.Rprop,
-            "sgd": torch.optim.SGD,
-        }.get(hparams["optimizer"].lower(), None)
-        assert optimizer is not None, "{} optimizer could not be found"
-
-        # filter optimizer arguments
-        optim_kwargs = dict()
-        optim_key = hparams["optimizer"]
-        for k, v in hparams.items():
-            if "optimizer__" in k:
-                attribute_tup = k.split("__")
-                if optim_key == attribute_tup[1] or attribute_tup[1] == "global":
-                    optim_kwargs[attribute_tup[2]] = v
-        optimizer = optimizer(model.parameters(), **optim_kwargs)
+        params = {'objective': hparams['objective'], 'max_depth': hparams['max_depth'],
+                  'subsample': hparams['subsample'], 'colsample_bytree': hparams['colsample_bytree'],
+                  'n_estimators': hparams['n_estimators'], 'gamma': hparams['gamma'],
+                  'reg_lambda': hparams['reg_lambda'], 'learning_rate': hparams['learning_rate'],
+                  'seed': hparams['seed'], 'eval_metric': 'rmse'}
 
         # metrics
         metrics = [mt.Metric(mt.rms_score, np.nanmean),
                    mt.Metric(mt.concordance_index, np.nanmean),
                    mt.Metric(mt.pearson_r2_score, np.nanmean)]
-        return model, optimizer, metrics
+        return params, {'train': train_dataset, 'val': val_dataset, 'test': test_dataset}, metrics
 
     @staticmethod
-    def data_provider(fold, flags, data_dict):
+    def data_provider(fold, flags, data):
         if not flags['cv']:
             print("Training scheme: train, validation" + (", test split" if flags['test'] else " split"))
-            train_dataset = DtiDataset(x_s=[data[1][0].X for data in data_dict.values()],
-                                       y_s=[data[1][0].y for data in data_dict.values()],
-                                       w_s=[data[1][0].w for data in data_dict.values()])
-            valid_dataset = DtiDataset(x_s=[data[1][1].X for data in data_dict.values()],
-                                       y_s=[data[1][1].y for data in data_dict.values()],
-                                       w_s=[data[1][1].w for data in data_dict.values()])
+            train_dataset = (data[1][0].X, data[1][0].y, data[1][0].w)
+            valid_dataset = (data[1][1].X, data[1][1].y, data[1][1].w)
             test_dataset = None
             if flags['test']:
-                test_dataset = DtiDataset(x_s=[data[1][2].X for data in data_dict.values()],
-                                          y_s=[data[1][2].y for data in data_dict.values()],
-                                          w_s=[data[1][2].w for data in data_dict.values()])
+                test_dataset = (data[1][2].X, data[1][2].y, data[1][2].w)
             data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset}
         else:
-            train_dataset = DtiDataset(x_s=[data[1][fold][0].X for data in data_dict.values()],
-                                       y_s=[data[1][fold][0].y for data in data_dict.values()],
-                                       w_s=[data[1][fold][0].w for data in data_dict.values()])
-            valid_dataset = DtiDataset(x_s=[data[1][fold][1].X for data in data_dict.values()],
-                                       y_s=[data[1][fold][1].y for data in data_dict.values()],
-                                       w_s=[data[1][fold][1].w for data in data_dict.values()])
-            test_dataset = DtiDataset(x_s=[data[1][fold][2].X for data in data_dict.values()],
-                                      y_s=[data[1][fold][2].y for data in data_dict.values()],
-                                      w_s=[data[1][fold][2].w for data in data_dict.values()])
+            train_dataset = (data[1][fold][0].X, data[1][fold][0].y, data[1][fold][0].w)
+            valid_dataset = (data[1][fold][1].X, data[1][fold][1].y, data[1][fold][1].w)
+            test_dataset = (data[1][fold][2].X, data[1][fold][2].y, data[1][fold][2].w)
             data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset}
         return data
 
@@ -116,78 +83,65 @@ class SimBoost(Trainer):
         return score
 
     @staticmethod
-    def train(model, optimizer, comps, prots, pair_y, metrics, transformer, tasks, epochs=5000, is_hsearch=False,
-              sim_data_node=None, epoch_ckpt=(2, 1.0)):
+    def train(xgb_params, data, metrics, transformer, simboost_feats_dict, tasks, epochs=500, is_hsearch=False,
+              sim_data_node=None):
         start = time.time()
-        best_model_wts = model.state_dict()
-        best_score = -10000
-        best_epoch = -1
-        terminate_training = False
-        e_avg = ExpAverage(.01)
-        scheduler = sch.StepLR(optimizer, step_size=400, gamma=0.01)
-        criterion = torch.nn.MSELoss()
-
         metrics_dict = {}
         metrics_node = DataNode(label="validation_metrics", data=metrics_dict)
         if sim_data_node:
             sim_data_node.data = [metrics_node]
 
-        epoch_losses = []
-        epoch_scores = []
-        for epoch in range(epochs):
-            if terminate_training:
-                print("Terminating training...")
-                break
-            for phase in ['train', 'val']:
-                if phase == 'train':
-                    print('Training....')
-                    model.train()
-                else:
-                    print('Validation....')
-                    model.eval()
+        # Data pre-processing
+        xgb_data = {}
+        for k in data:
+            ds = data[k]
+            dmat_x = []
+            dmat_y = []
+            for x, y, _ in zip(*ds):
+                comp, prot = x
+                dmat_x.append(simboost_feats_dict[Pair(comp, prot)])
+                dmat_y.append(float(y))
+            dmatrix = xgb.DMatrix(data=np.array(dmat_x), label=np.array(dmat_y))
+            xgb_data[k] = dmatrix
 
-                with torch.set_grad_enabled(phase == 'train'):
-                    pass
+        # training
+        xgb_eval_results = {}
+        eval_type = 'val' if is_hsearch else 'test'
+        model = xgb.train(xgb_params, xgb_data['train'], epochs,
+                          [(xgb_data['train'], 'train'), (xgb_data[eval_type], eval_type)],
+                          early_stopping_rounds=10, evals_result=xgb_eval_results)
 
-                if phase == 'train':
-                    pass
-                else:
-                    pass
+        # evaluation
+        y_hat = model.predict(xgb_data[eval_type]).reshape(-1, len(tasks))
+        y_true = xgb_data[eval_type].get_label().reshape(-1, len(tasks))
+        eval_dict = {}
+        w = data[eval_type][2].reshape(-1, len(tasks))
+        score = SimBoost.evaluate(eval_dict, y_true, y_hat, w, metrics, tasks, transformer)
 
-            if phase == 'train':
-                scheduler.step()
-                ep_loss = np.nanmean(epoch_losses)
-                e_avg.update(ep_loss)
-                if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
-                    if e_avg.value > epoch_ckpt[1]:
-                        terminate_training = True
-
-                # Adjust the learning rate.
-                scheduler.step()
-                print("\nPhase: {}, avg task loss={:.4f}, ".format(phase, np.nanmean(epoch_losses)))
-            else:
-                mean_score = np.mean(epoch_scores)
-                if best_score < mean_score:
-                    best_score = mean_score
-                    best_model_wts = copy.deepcopy(model.state_dict())
-                    best_epoch = epoch
+        print('Evaluation: score={}, metrics={}'.format(score, eval_dict))
 
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
-        model.load_state_dict(best_model_wts)
-        return {'model': model, 'score': best_score, 'epoch': best_epoch}
+        return {'model': model, 'score': score, 'epoch': model.best_iteration}
 
     @staticmethod
-    def evaluate_model():
+    def evaluate_model(model_path, data, metrics, transformer, simboost_feats_dict, tasks, epochs=50,
+                       sim_data_node=None):
         pass
 
 
-def to_numpy(tensor):
-    return tensor.cpu().detach().numpy()
+def save_xgboost(model, path, name):
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, name + '.pkl'), 'wb') as f:
+        pickle.dump(model, f)
+    # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
+    #     f.write(name + '\n')
 
 
-def to_tensor(array):
-    return torch.from_numpy(array)
+def load_xgboost(path, name):
+    path = os.path.join(path, name)
+    if os.path.exists(path):
+        return pickle.load(path)
 
 
 def main(flags):
@@ -233,11 +187,12 @@ def main(flags):
             data_key = {"ecfp4": "SB_ECFP4",
                         "ecfp8": "SB_ECFP8"}.get(cview)
             data = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed,
-                            simboost_pairwise_feats_dict=pairwise_feats_dict)
-            transformer = data[2]
-            drug_kernel_dict, prot_kernel_dict = data[4]
+                            simboost_mf_feats_dict=pairwise_feats_dict)
             tasks = data[0]
             flags["tasks"] = tasks
+            simboost_feats_dict = data[5]
+            transformer = data[2]
+            drug_kernel_dict, prot_kernel_dict = data[4]
 
             trainer = SimBoost()
 
@@ -258,12 +213,11 @@ def main(flags):
                                    "data": data}
                 n_iters = 3000
                 extra_train_args = {"transformer": transformer,
-                                    "drug_kernel_dict": drug_kernel_dict,
-                                    "prot_kernel_dict": prot_kernel_dict,
+                                    "simboost_feats_dict": simboost_feats_dict,
                                     "tasks": tasks,
                                     "is_hsearch": True}
 
-                hparams_conf = get_hparam_config(flags, cview, pview)
+                hparams_conf = get_hparam_config(flags, seed)
 
                 if hparam_search is None:
                     search_alg = {"random_search": RandomSearchCV,
@@ -275,7 +229,7 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               save_model_fn=io.save_dict_model,
+                                               save_model_fn=save_dict_model,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,
@@ -291,15 +245,14 @@ def main(flags):
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data, transformer, flags, data_node, (cview, pview), drug_kernel_dict,
-                             prot_kernel_dict)
+                invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label, simboost_feats_dict, seed)
 
         # save simulation data resource tree to file.
         sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, drug_kernel_dict, prot_kernel_dict):
-    hyper_params = default_hparams_bopt(flags, *view)
+def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, simboost_feats_dict, seed):
+    hyper_params = default_hparams_bopt(flags, seed)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
         folds_data = []
@@ -308,63 +261,62 @@ def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, drug
         for k in range(flags["fold_num"]):
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
-            start_fold(k_node, data, flags, hyper_params, tasks, trainer, transformer, view, drug_kernel_dict,
-                       prot_kernel_dict, k)
+            start_fold(k_node, data, flags, hyper_params, tasks, trainer, transformer, view, simboost_feats_dict, k)
     else:
-        start_fold(data_node, data, flags, hyper_params, tasks, trainer, transformer, view, drug_kernel_dict,
-                   prot_kernel_dict)
+        start_fold(data_node, data, flags, hyper_params, tasks, trainer, transformer, view, simboost_feats_dict)
 
 
-def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transformer, view, drug_kernel_dict,
-               prot_kernel_dict, k=None):
+def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transformer, view, simboost_feats_dict,
+               k=None):
     data = trainer.data_provider(k, flags, data)
-    model, optimizer, all_comps, all_prots, pair_to_value_y, metrics = trainer.initialize(hparams=hyper_params,
-                                                                                          train_dataset=data["train"],
-                                                                                          val_dataset=data["val"],
-                                                                                          test_dataset=data["test"])
+    model, data, metrics = trainer.initialize(hparams=hyper_params, train_dataset=data["train"],
+                                              val_dataset=data["val"], test_dataset=data["test"])
     if flags["eval"]:
         pass
     else:
         # Train the model
-        results = trainer.train(model, optimizer, all_comps, all_prots, pair_to_value_y, metrics, transformer,
-                                tasks=tasks, sim_data_node=sim_data_node)
+        results = trainer.train(model, data, metrics, transformer, simboost_feats_dict, tasks=tasks,
+                                sim_data_node=sim_data_node)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        save_dict_model(model, flags["model_dir"],
-                        "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], '_'.join(view), flags["model_name"],
-                                                       split_label,
-                                                       epoch, score))
+        save_xgboost(model, flags["model_dir"],
+                     "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
+                                                    score))
 
 
-def default_hparams_rand(flags, comp_view, prot_view):
+def default_hparams_rand(flags, seed):
     return {
         "reg_lambda": 0.1,
-        "comp_view": comp_view,
-        "prot_view": prot_view
     }
 
 
-def default_hparams_bopt(flags, comp_view, prot_view):
+def default_hparams_bopt(flags, seed):
     return {
-        "reg_lambda": 0.1,
-        "comp_view": comp_view,
-        "prot_view": prot_view,
-        "latent_dim": 10,
-
-        # optimizer params
-        "optimizer": "rmsprop",
-        "optimizer__global__weight_decay": 0.0001,
-        "optimizer__global__lr": 0.0001,
+        'seed': seed,
+        'objective': 'reg:squarederror',  # reg:linear
+        'max_depth': 5,
+        'subsample': 0.8,
+        'colsample_bytree': .7,
+        'n_estimators': 100,
+        'gamma': .1,
+        'reg_lambda': 0.5,
+        'learning_rate': 0.1,
     }
 
 
-def get_hparam_config(flags, comp_view, prot_view):
+def get_hparam_config(flags, seed):
     return {
-        "reg_lambda": RealParam(min=0.1),
-        "comp_view": ConstantParam(comp_view),
-        "prot_view": ConstantParam(prot_view)
+        'seed': ConstantParam(seed),
+        'objective': ConstantParam('reg:squarederror'),  # reg:linear
+        'max_depth': DiscreteParam(5, 10),
+        'subsample': RealParam(min=0.5),
+        'colsample_bytree': RealParam(min=0.5),
+        'n_estimators': DiscreteParam(min=50, max=200),
+        'gamma': RealParam(min=0.1),
+        'reg_lambda': RealParam(min=.1),
+        'learning_rate': LogRealParam(min=1e-2),
     }
 
 

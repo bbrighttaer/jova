@@ -67,7 +67,7 @@ def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
 def load_dti_data(featurizer, dataset, prot_seq_dict, input_protein=True, cross_validation=False, test=False,
                   fold_num=5, split='random', reload=True, predict_cold=False, cold_drug=False, cold_target=False,
                   cold_drug_cluster=False, split_warm=False, filter_threshold=0,
-                  mode='regression', data_dir='../../data/', seed=0, simboost_pairwise_feats_dict=None):
+                  mode='regression', data_dir='../../data/', seed=0, simboost_mf_feats_dict=None):
     loading_functions = {
         'davis': load_davis,
         'metz': load_metz,
@@ -82,23 +82,23 @@ def load_dti_data(featurizer, dataset, prot_seq_dict, input_protein=True, cross_
     if cross_validation:
         test = False
     tasks, all_dataset, transformers, \
-    fp, kernel_dicts = loading_functions[dataset](featurizer=featurizer,
-                                                  cross_validation=cross_validation,
-                                                  test=test, split=split,
-                                                  reload=reload,
-                                                  K=fold_num, mode=mode,
-                                                  predict_cold=predict_cold,
-                                                  cold_drug=cold_drug,
-                                                  cold_target=cold_target,
-                                                  cold_drug_cluster=cold_drug_cluster,
-                                                  split_warm=split_warm,
-                                                  prot_seq_dict=prot_seq_dict,
-                                                  filter_threshold=filter_threshold,
-                                                  input_protein=input_protein,
-                                                  currdir=data_dir,
-                                                  seed=seed,
-                                                  simboost_pairwise_feats_dict=simboost_pairwise_feats_dict)
-    return tasks, all_dataset, transformers, fp, kernel_dicts
+    fp, kernel_dicts, simboost_feats = loading_functions[dataset](featurizer=featurizer,
+                                                                  cross_validation=cross_validation,
+                                                                  test=test, split=split,
+                                                                  reload=reload,
+                                                                  K=fold_num, mode=mode,
+                                                                  predict_cold=predict_cold,
+                                                                  cold_drug=cold_drug,
+                                                                  cold_target=cold_target,
+                                                                  cold_drug_cluster=cold_drug_cluster,
+                                                                  split_warm=split_warm,
+                                                                  prot_seq_dict=prot_seq_dict,
+                                                                  filter_threshold=filter_threshold,
+                                                                  input_protein=input_protein,
+                                                                  currdir=data_dir,
+                                                                  seed=seed,
+                                                                  simboost_mf_feats_dict=simboost_mf_feats_dict)
+    return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_feats
 
 
 def load_proteins(prot_desc_path):
@@ -365,7 +365,7 @@ def cuda(tensor):
         return tensor
 
 
-def get_data(featurizer, flags, prot_sequences, seed, simboost_pairwise_feats_dict=None):
+def get_data(featurizer, flags, prot_sequences, seed, simboost_mf_feats_dict=None):
     # logger = get_logger(name="Data loader")
     print("--------------About to load {}-{} data-------------".format(featurizer, flags['dataset']))
     try:
@@ -387,7 +387,7 @@ def get_data(featurizer, flags, prot_sequences, seed, simboost_pairwise_feats_di
                              split_warm=flags['split_warm'],
                              seed=seed,
                              filter_threshold=flags["filter_threshold"],
-                             simboost_pairwise_feats_dict=simboost_pairwise_feats_dict)
+                             simboost_mf_feats_dict=simboost_mf_feats_dict)
     finally:
         print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset']))
 
@@ -450,6 +450,7 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
     :return:
     """
     assert isinstance(pairwise_feats, dict), "Drug-Target features dictionary must be provided."
+    print('SimBoost Drug-Target feature vector computation started')
     pbar = UnboundedProgressbar()
     pbar.start()
 
@@ -503,16 +504,13 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
                 Tgraph.add_edge(p1, p2)
     prot_feats = compute_type2_features(compute_type1_features(Mcols, all_prots, T, nbins), T, Tgraph)
 
-    pbar.stop()
-    pbar.join()
-
     # Type 3 features
     btw_cent = nx.betweenness_centrality(Mgraph)
     cls_cent = nx.closeness_centrality(Mgraph)
     # eig_cent = nx.eigenvector_centrality(Mgraph, tol=1e-3, max_iter=500)
     # pagerank = nx.pagerank(Mgraph, tol=1e-3, max_iter=1000)
     drug_target_feats_dict = defaultdict(lambda: list())
-    max_length = []
+    vec_lengths = []
     for pair in pair_to_value_y:
         comp, prot = pair.p1, pair.p2
         feat = drug_target_feats_dict[Pair(comp, prot)]
@@ -525,14 +523,16 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
         for n in Mgraph.neighbors(prot):
             if Pair(comp, n) in pair_to_value_y:
                 d_av_lst.append(pair_to_value_y[Pair(comp, n)])
-        feat.append(np.mean(d_av_lst))
+        if len(d_av_lst) > 0:
+            feat.append(np.mean(d_av_lst))
 
         # t.d.ave
         t_av_lst = []
         for n in Mgraph.neighbors(comp):
             if Pair(n, prot) in pair_to_value_y:
                 t_av_lst.append(pair_to_value_y[Pair(n, prot)])
-        feat.append(np.mean(t_av_lst))
+        if len(t_av_lst) > 0:
+            feat.append(np.mean(t_av_lst))
 
         # d.t.bt, d.t.cl, d.t.ev
         feat.append(btw_cent[comp])
@@ -550,10 +550,19 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
         feat.extend(comp_feats[comp])
         feat.extend(prot_feats[prot])
 
-        max_length.append(len(feat))
+        vec_lengths.append(len(feat))
 
-    print(max_length)
-    return None
+    # zero-pad all vectors to be of the same dimension
+    dim = max(vec_lengths)
+    for k in drug_target_feats_dict:
+        feat = drug_target_feats_dict[k]
+        pvec = [0] * (dim - len(feat))
+        feat.extend(pvec)
+
+    pbar.stop()
+    pbar.join()
+    print('SimBoost Drug-Target feature vector computation finished. Vector dimension={}'.format(dim))
+    return drug_target_feats_dict
 
 
 def compute_type1_features(M, all_E, Edict, nbins):

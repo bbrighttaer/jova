@@ -112,7 +112,7 @@ class MF(Trainer):
         best_epoch = -1
         terminate_training = False
         e_avg = ExpAverage(.01)
-        scheduler = sch.StepLR(optimizer, step_size=500, gamma=0.01)
+        # scheduler = sch.StepLR(optimizer, step_size=500, gamma=0.01)
         criterion = torch.nn.MSELoss()
 
         metrics_dict = {}
@@ -147,7 +147,6 @@ class MF(Trainer):
             optimizer.step()
             losses.append(loss.item())
 
-            scheduler.step()
             ep_loss = np.nanmean(losses)
             e_avg.update(ep_loss)
             # if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
@@ -155,7 +154,7 @@ class MF(Trainer):
             #         terminate_training = True
 
             # Adjust the learning rate.
-            scheduler.step()
+            # scheduler.step()
 
             if min_error > loss.item():
                 min_error = loss.item()
@@ -342,12 +341,12 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
-        "latent_dim": 100,
+        "latent_dim": 84,
 
         # optimizer params
-        "optimizer": "rmsprop",
-        "optimizer__global__weight_decay": 0.005517384954317297,
-        "optimizer__global__lr": 0.012095108260810254,
+        "optimizer": "adagrad",
+        "optimizer__global__weight_decay": 0.012233128918089326,
+        "optimizer__global__lr": 0.21291818884704686,
     }
 
 

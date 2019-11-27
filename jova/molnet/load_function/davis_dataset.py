@@ -19,14 +19,14 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
                reload=True, K=5, mode='regression', predict_cold=False, cold_drug=False,
                cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
                prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True, seed=0,
-               gnn_radius=2, simboost_pairwise_feats_dict=None):
+               gnn_radius=2, simboost_mf_feats_dict=None):
     if cross_validation:
         assert not test
     feat_label = featurizer
     data_dir = currdir + "davis_data/"
     gnn_fingerprint = None
-    # for Kron-RLS and other kernel-based methods
-    drug_sim_kernel_dict = prot_sim_kernel_dict = None
+    # for SimBoost, Kron-RLS and other kernel-based methods
+    simboost_drug_target_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
     if input_protein:
         if mode == 'regression' or mode == 'reg-threshold':
             mode = 'regression'
@@ -66,12 +66,14 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         if cross_validation:
             delim = "_CV" + delim
             save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
-            loaded, all_dataset, transformers, fp, kernel_dicts = load_nested_cv_dataset_from_disk(save_dir, K)
+            loaded, all_dataset, transformers, fp, kernel_dicts, \
+            simboost_drug_target_feats_dict = load_nested_cv_dataset_from_disk(save_dir, K)
         else:
             save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
-            loaded, all_dataset, transformers, fp, kernel_dicts = load_dataset_from_disk(save_dir)
+            loaded, all_dataset, transformers, fp,\
+            kernel_dicts, simboost_drug_target_feats_dict = load_dataset_from_disk(save_dir)
         if loaded:
-            return tasks, all_dataset, transformers, fp, kernel_dicts
+            return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_drug_target_feats_dict
 
     dataset_file = os.path.join(data_dir, file_name)
     if featurizer == 'Weave':
@@ -110,7 +112,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         drug_sim_kernel_dict, prot_sim_kernel_dict = compute_similarity_kernel_matrices(dataset)
     elif feat_label in ['SB_ECFP8', 'SB_ECFP4']:
         from jova.data.data import compute_simboost_drug_target_features
-        drug_target_features = compute_simboost_drug_target_features(dataset, simboost_pairwise_feats_dict)
+        simboost_drug_target_feats_dict = compute_simboost_drug_target_features(dataset, simboost_mf_feats_dict)
 
     splitters = {
         'no_split': splits.NoSplit(),
@@ -131,13 +133,13 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         all_dataset = (train, valid, test)
         if reload:
             save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint,
-                                 drug_sim_kernel_dict, prot_sim_kernel_dict)
+                                 drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict)
     elif cross_validation:
         fold_datasets = splitter.k_fold_split(dataset, K, seed=seed)
         all_dataset = fold_datasets
         if reload:
             save_nested_cv_dataset_to_disk(save_dir, all_dataset, K, transformers, gnn_fingerprint,
-                                           drug_sim_kernel_dict, prot_sim_kernel_dict)
+                                           drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict)
     else:
         # not cross validating, and not testing.
         train, valid, test = splitter.train_valid_test_split(dataset, frac_train=0.9, frac_valid=0.1,
@@ -145,6 +147,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
         all_dataset = (train, valid, test)
         if reload:
             save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint,
-                                 drug_sim_kernel_dict, prot_sim_kernel_dict)
+                                 drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict)
 
-    return tasks, all_dataset, transformers, gnn_fingerprint, (drug_sim_kernel_dict, prot_sim_kernel_dict)
+    return tasks, all_dataset, transformers, gnn_fingerprint, \
+           (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_drug_target_feats_dict
