@@ -2,7 +2,7 @@
 # Project: jova
 # Date: 7/2/19
 # Time: 1:24 PM
-# File: kronrls.py
+# File: mf.py
 
 from __future__ import absolute_import
 from __future__ import division
@@ -20,8 +20,7 @@ from datetime import datetime as dt
 
 import numpy as np
 import torch
-import torch.optim.lr_scheduler as sch
-from soek import RealParam, CategoricalParam, LogRealParam, DiscreteParam
+from soek import CategoricalParam, LogRealParam, DiscreteParam
 from soek.bopt import BayesianOptSearchCV
 from soek.rand import RandomSearchCV
 

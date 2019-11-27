@@ -2,34 +2,33 @@
 # Project: jova
 # Date: 7/2/19
 # Time: 1:24 PM
-# File: kronrls.py
+# File: simboost.py
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import os
 import argparse
+import os
 import pickle
 import random
 import time
 from datetime import datetime as dt
 
 import numpy as np
-import torch
 import xgboost as xgb
-from jova.data.data import Pair
 from soek import RealParam, DiscreteParam, LogRealParam
 from soek.bopt import BayesianOptSearchCV
 from soek.params import ConstantParam
 from soek.rand import RandomSearchCV
 
 import jova.metrics as mt
-from jova.data import get_data, load_proteins, DtiDataset
+from jova.data import get_data, load_proteins
+from jova.data.data import Pair
 from jova.metrics import compute_model_performance
-from jova.utils import Trainer, io
-from jova.utils.io import save_dict_model, load_dict_model
+from jova.utils import Trainer
+from jova.utils.io import load_dict_model
 from jova.utils.sim_data import DataNode
 
 currentDT = dt.now()
@@ -47,7 +46,7 @@ class SimBoost(Trainer):
                   'subsample': hparams['subsample'], 'colsample_bytree': hparams['colsample_bytree'],
                   'n_estimators': hparams['n_estimators'], 'gamma': hparams['gamma'],
                   'reg_lambda': hparams['reg_lambda'], 'learning_rate': hparams['learning_rate'],
-                  'seed': hparams['seed'], 'eval_metric': 'rmse'}
+                  'seed': hparams['seed'], 'eval_metric': 'rmse', 'verbosity': 1}
 
         # metrics
         metrics = [mt.Metric(mt.rms_score, np.nanmean),
@@ -83,7 +82,7 @@ class SimBoost(Trainer):
         return score
 
     @staticmethod
-    def train(xgb_params, data, metrics, transformer, simboost_feats_dict, tasks, epochs=500, is_hsearch=False,
+    def train(xgb_params, data, metrics, transformer, simboost_feats_dict, tasks, epochs=3000, is_hsearch=False,
               sim_data_node=None):
         start = time.time()
         metrics_dict = {}
@@ -132,10 +131,10 @@ class SimBoost(Trainer):
 
 def save_xgboost(model, path, name):
     os.makedirs(path, exist_ok=True)
-    with open(os.path.join(path, name + '.pkl'), 'wb') as f:
-        pickle.dump(model, f)
-    # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
-    #     f.write(name + '\n')
+    # with open(os.path.join(path, name + '.pkl'), 'wb') as f:
+    #     pickle.dump(model, f)
+    with open(os.path.join(path, "simboost_dummy_save.txt"), 'a') as f:
+        f.write(name + '\n')
 
 
 def load_xgboost(path, name):
@@ -229,7 +228,7 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               save_model_fn=save_dict_model,
+                                               save_model_fn=save_xgboost,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,
@@ -315,8 +314,8 @@ def get_hparam_config(flags, seed):
         'colsample_bytree': RealParam(min=0.5),
         'n_estimators': DiscreteParam(min=50, max=200),
         'gamma': RealParam(min=0.1),
-        'reg_lambda': RealParam(min=.1),
-        'learning_rate': LogRealParam(min=1e-2),
+        'reg_lambda': RealParam(min=0.1),
+        'learning_rate': LogRealParam(),
     }
 
 

@@ -88,8 +88,8 @@ class KronRLS(Trainer):
         # Construct Kd and Kt
         train_mol = set()
         train_prot = set()
-        labels = defaultdict(lambda: float)
-        weights = defaultdict(lambda: float)
+        labels = defaultdict(lambda: float())
+        weights = defaultdict(lambda: float())
         for x, y, w in zip(*data['train']):
             mol, prot = x
             train_mol.add(mol)
@@ -110,9 +110,7 @@ class KronRLS(Trainer):
 
         # Eigen decompositions
         Lambda, V = np.linalg.eigh(Kd)
-        # Lambda, V = np.real(Lambda), np.real(V)
         Sigma, U = np.linalg.eigh(Kt)
-        # Sigma, U = np.real(Sigma), np.real(U)
 
         # Compute C
         C = np.kron(np.diag(Lambda), np.diag(Sigma)) + reg_lambda * np.identity(Kd.shape[0] * Kt.shape[0])

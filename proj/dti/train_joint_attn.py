@@ -875,7 +875,7 @@ def main(flags):
                                                    results_file="{}_{}_dti_{}_{}.csv".format(
                                                        flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=40, seed=seed)
+                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
                     print(stats)
                     print("Best params = {}".format(stats.best(m="max")))
                 else:
