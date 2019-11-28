@@ -11,7 +11,7 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import numpy as np
-from deepchem.trans import undo_transforms
+from jova.trans import undo_transforms
 
 
 def compute_model_performance(metrics, y_pred, y, w, transformers, tasks, n_classes=2, per_task_metrics=False):

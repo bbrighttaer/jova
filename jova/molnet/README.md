@@ -1,1 +1,1 @@
-Original sources are from the PADME and DeepChem projects.
+Original sources are from the [PADME](https://github.com/simonfqy/PADME) and [DeepChem](https://github.com/deepchem/deepchem) projects.

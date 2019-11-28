@@ -1,4 +1,4 @@
-# Re-organization of the GNN work in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
+# Re-organization of the original GNN code of in https://academic.oup.com/bioinformatics/article/35/2/309/5050020
 # Author: bbrighttaer
 # Project: jova
 # Date: 10/29/19
@@ -13,10 +13,14 @@ from __future__ import unicode_literals
 
 import os
 import pickle
-from padme.feat import Featurizer
-import numpy as np
 from collections import defaultdict
+
+import numpy as np
 from rdkit import Chem
+
+from jova.feat import Featurizer
+
+__all__ = ['GNNFeaturizer', 'GnnMol']
 
 
 def create_atoms(feat, mol):

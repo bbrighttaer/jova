@@ -15,27 +15,20 @@ import time
 from collections import defaultdict
 from math import sqrt
 
+import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
+from Bio import Align
 from padme.feat.mol_graphs import ConvMol
-from torch.utils.data import dataset as ds
-from rdkit import Chem
 from rdkit.Chem import DataStructs
+from torch.utils.data import dataset as ds
+
 from jova import cuda as _cuda
-from jova.molnet.load_function.davis_dataset import load_davis
-from jova.molnet.load_function.kiba_dataset import load_kiba
-from jova.molnet.load_function.kinase_datasets import load_kinases
-from jova.molnet.load_function.metz_dataset import load_metz
-from jova.molnet.load_function.nci60_dataset import load_nci60
-from jova.molnet.load_function.tc_dataset import load_toxcast
-from jova.molnet.load_function.tc_full_kinase_datasets import load_tc_full_kinases
-from jova.molnet.load_function.tc_kinase_datasets import load_tc_kinases
+from jova.data import load_csv_dataset
 from jova.utils.math import block_diag_irregular
 from jova.utils.thread import UnboundedProgressbar
 from jova.utils.train_helpers import ViewsReg
-from Bio import Align
-import networkx as nx
 
 
 def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
@@ -64,40 +57,29 @@ def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
         prot_seq_dict[pair] = (phosphorylated, sequence)
 
 
-def load_dti_data(featurizer, dataset, prot_seq_dict, input_protein=True, cross_validation=False, test=False,
-                  fold_num=5, split='random', reload=True, predict_cold=False, cold_drug=False, cold_target=False,
-                  cold_drug_cluster=False, split_warm=False, filter_threshold=0,
-                  mode='regression', data_dir='../../data/', seed=0, simboost_mf_feats_dict=None):
-    loading_functions = {
-        'davis': load_davis,
-        'metz': load_metz,
-        'kiba': load_kiba,
-        'toxcast': load_toxcast,
-        'all_kinase': load_kinases,
-        'tc_kinase': load_tc_kinases,
-        'tc_full_kinase': load_tc_full_kinases,
-        'nci60': load_nci60
-    }
-
+def load_dti_data(featurizer, dataset_name, dataset_file, prot_seq_dict, input_protein=True, cross_validation=False,
+                  test=False, fold_num=5, split='random', reload=True, predict_cold=False, cold_drug=False,
+                  cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
+                  mode='regression', seed=0, simboost_mf_feats_dict=None):
     if cross_validation:
         test = False
     tasks, all_dataset, transformers, \
-    fp, kernel_dicts, simboost_feats = loading_functions[dataset](featurizer=featurizer,
-                                                                  cross_validation=cross_validation,
-                                                                  test=test, split=split,
-                                                                  reload=reload,
-                                                                  K=fold_num, mode=mode,
-                                                                  predict_cold=predict_cold,
-                                                                  cold_drug=cold_drug,
-                                                                  cold_target=cold_target,
-                                                                  cold_drug_cluster=cold_drug_cluster,
-                                                                  split_warm=split_warm,
-                                                                  prot_seq_dict=prot_seq_dict,
-                                                                  filter_threshold=filter_threshold,
-                                                                  input_protein=input_protein,
-                                                                  currdir=data_dir,
-                                                                  seed=seed,
-                                                                  simboost_mf_feats_dict=simboost_mf_feats_dict)
+    fp, kernel_dicts, simboost_feats = load_csv_dataset(dataset_name, dataset_file,
+                                                        featurizer=featurizer,
+                                                        cross_validation=cross_validation,
+                                                        test=test, split=split,
+                                                        reload=reload,
+                                                        K=fold_num, mode=mode,
+                                                        predict_cold=predict_cold,
+                                                        cold_drug=cold_drug,
+                                                        cold_target=cold_target,
+                                                        cold_drug_cluster=cold_drug_cluster,
+                                                        split_warm=split_warm,
+                                                        prot_seq_dict=prot_seq_dict,
+                                                        filter_threshold=filter_threshold,
+                                                        input_protein=input_protein,
+                                                        seed=seed,
+                                                        simboost_mf_feats_dict=simboost_mf_feats_dict)
     return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_feats
 
 
@@ -367,10 +349,11 @@ def cuda(tensor):
 
 def get_data(featurizer, flags, prot_sequences, seed, simboost_mf_feats_dict=None):
     # logger = get_logger(name="Data loader")
-    print("--------------About to load {}-{} data-------------".format(featurizer, flags['dataset']))
+    print("--------------About to load {}-{} data-------------".format(featurizer, flags['dataset_name']))
     try:
         return load_dti_data(featurizer=featurizer,
-                             dataset=flags['dataset'],
+                             dataset_name=flags['dataset_name'],
+                             dataset_file=flags['dataset_file'],
                              prot_seq_dict=prot_sequences,
                              input_protein=True,
                              cross_validation=flags['cv'],
@@ -382,14 +365,13 @@ def get_data(featurizer, flags, prot_sequences, seed, simboost_mf_feats_dict=Non
                              cold_drug=flags['cold_drug'],
                              cold_target=flags['cold_target'],
                              mode='regression',
-                             data_dir=flags['data_dir'],
                              cold_drug_cluster=flags['cold_drug_cluster'],
                              split_warm=flags['split_warm'],
                              seed=seed,
                              filter_threshold=flags["filter_threshold"],
                              simboost_mf_feats_dict=simboost_mf_feats_dict)
     finally:
-        print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset']))
+        print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset_name']))
 
 
 def compute_similarity_kernel_matrices(dataset):

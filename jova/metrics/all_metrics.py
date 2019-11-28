@@ -14,7 +14,7 @@ from time import gmtime, strftime
 
 import matplotlib.pyplot as plt
 import numpy as np
-from deepchem.utils.save import log
+from jova.utils.save import log
 from scipy.stats import pearsonr
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import auc
@@ -23,7 +23,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.metrics import precision_recall_curve
 from sklearn.metrics import roc_auc_score
 
-from padme.metrics.cindex_measure import cindex
+from jova.metrics.cindex_measure import cindex
 
 
 def to_one_hot(y, n_classes=2):

@@ -9,7 +9,7 @@ import deepchem
 import padme
 import pandas as pd
 
-from feat.gnnfeat import GNNFeaturizer
+from jova.feat.gnnfeat import GNNFeaturizer
 
 
 def load_toxcast(featurizer='Weave', cross_validation=False, test=False, split='random',

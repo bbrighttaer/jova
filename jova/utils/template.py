@@ -18,7 +18,7 @@ class Trainer(abc.ABC):
     search, as implemented in this project.
     """
 
-    @abc.abstractstaticmethod
+    @staticmethod
     def initialize(hparams, train_dataset, val_dataset, *args, **kwargs):
         """
         Creates all model training elements.
@@ -37,7 +37,7 @@ class Trainer(abc.ABC):
         """
         pass
 
-    @abc.abstractstaticmethod
+    @staticmethod
     def data_provider(fold, *args, **kwargs):
         """
         Provides the datasets for each fold for training. Standard train-validation(-test) split is treated as a one
@@ -54,7 +54,7 @@ class Trainer(abc.ABC):
         """
         pass
 
-    @abc.abstractstaticmethod
+    @staticmethod
     def evaluate(*args, **kwargs):
         """
         Evaluation function that is called after every batch in the evaluation phase.
@@ -66,7 +66,7 @@ class Trainer(abc.ABC):
         """
         pass
 
-    @abc.abstractstaticmethod
+    @staticmethod
     def train(eval_fn, *args, **kwargs):
         """
         Implements the main training loop of the mod
@@ -81,7 +81,7 @@ class Trainer(abc.ABC):
         """
         pass
 
-    @abc.abstractmethod
+    @staticmethod
     def evaluate_model(eval_fn, *args, **kwargs):
         """
         Procedures for loading and evaluating an already trained model goes here.

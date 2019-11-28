@@ -541,7 +541,7 @@ def main(flags):
         # Simulation data resource tree
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        dataset_lbl = flags["dataset"]
+        dataset_lbl = flags["dataset_name"]
         node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
                                                 "eval" if flags["eval"] else "train", date_label)
         sim_data = DataNode(label=node_label)
@@ -861,10 +861,13 @@ def get_hparam_config(flags, comp_view, prot_view):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
-    parser.add_argument("--dataset",
+    parser.add_argument("--dataset_name",
                         type=str,
                         default="davis",
                         help="Dataset name.")
+    parser.add_argument("--dataset_file",
+                        type=str,
+                        help="Dataset file.")
 
     # Either CV or standard train-val(-test) split.
     scheme = parser.add_mutually_exclusive_group()
@@ -943,10 +946,9 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    parser.add_argument('--data_dir',
-                        type=str,
-                        default='../../data/',
-                        help='Root folder of data (Davis, KIBA, Metz) folders.')
+    # parser.add_argument('--data_dir',
+    #                     type=str,
+    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -973,7 +975,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     FLAGS = dict()
-    FLAGS['dataset'] = args.dataset
+    FLAGS['dataset_name'] = args.dataset_name
+    FLAGS['dataset_file'] = args.dataset_file
     FLAGS['fold_num'] = args.fold_num
     FLAGS['cv'] = True if FLAGS['fold_num'] > 2 else False
     FLAGS['test'] = args.test
@@ -989,7 +992,6 @@ if __name__ == '__main__':
     FLAGS['prot_profile'] = args.prot_profile
     FLAGS['prot_vocab'] = args.prot_vocab
     FLAGS['reload'] = args.reload
-    FLAGS['data_dir'] = args.data_dir
     FLAGS['split_warm'] = args.split_warm
     FLAGS['hparam_search'] = args.hparam_search
     FLAGS["hparam_search_alg"] = args.hparam_search_alg

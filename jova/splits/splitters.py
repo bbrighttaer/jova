@@ -21,17 +21,21 @@ from rdkit.ML.Cluster import Butina
 from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
 from scipy.special import comb
 from scipy.cluster.hierarchy import single, fcluster
-import deepchem as dc
 from collections import OrderedDict
-from padme.data import DiskDataset
-from deepchem.utils import ScaffoldGenerator
-from deepchem.utils.save import log
-from deepchem.data import NumpyDataset
-from deepchem.utils.save import load_data
+import jova
+from jova.data import DiskDataset
+from jova.utils import ScaffoldGenerator
+from jova.utils.save import log
+from jova.data import NumpyDataset
+from jova.utils.save import load_data
 from rdkit import Chem
 from rdkit import DataStructs
 from rdkit.Chem import rdMolDescriptors
 from rdkit.Chem.Fingerprints import FingerprintMols
+
+__all__ = ['RandomGroupSplitter', 'RandomStratifiedSplitter', 'SingletaskStratifiedSplitter', 'MolecularWeightSplitter',
+           'MaxMinSplitter', 'RandomSplitter', 'IndexSplitter', 'IndiceSplitter', 'ButinaSplitter', 'ScaffoldSplitter',
+           'FingerprintSplitter', 'SpecifiedSplitter', 'TimeSplitterPDBbind', 'NoSplit']
 
 
 def generate_scaffold(smiles, include_chirality=False):
@@ -1626,7 +1630,7 @@ class TimeSplitterPDBbind(Splitter):
                 data_dir = os.environ['DEEPCHEM_DATA_DIR']
                 self.year_file = os.path.join(data_dir, 'pdbbind_year.csv')
                 if not os.path.exists(self.year_file):
-                    dc.utils.download_url(
+                    jova.utils.download_url(
                         'http://deepchem.io.s3-website-us-west-1.amazonaws.com/datasets/pdbbind_year.csv',
                         dest_dir=data_dir)
             except:

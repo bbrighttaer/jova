@@ -10,12 +10,10 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-from collections import defaultdict
-
-import torch
 import numpy as np
 import rdkit.Chem as Chem
-import torch.nn.functional as F
+import torch
+from torch.nn.functional import pad
 
 
 class UnimodalAttentionData(object):
@@ -69,7 +67,7 @@ class UnimodalAttentionData(object):
         # get the maximum number of sub-sequence groups in the batch
         max_seq = max([len(p) for p in x])
         # pad sequences for batch processing
-        x = [F.pad(tensor, (0, 0, 0, max_seq - tensor.shape[0]), value=len(self.prot_vocab)) for tensor in x]
+        x = [pad(tensor, (0, 0, 0, max_seq - tensor.shape[0]), value=len(self.prot_vocab)) for tensor in x]
         x = torch.stack(x, dim=0).long()  # structure as [batch, num_seg, dim]
         # assert (x.permute(1, 0, 2).shape[:2] == self.x.shape[:2])
 

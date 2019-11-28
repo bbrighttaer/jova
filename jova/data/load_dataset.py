@@ -6,6 +6,7 @@ from __future__ import unicode_literals
 import os
 
 import pandas as pd
+
 import jova
 import jova.splits as splits
 from jova.feat import GNNFeaturizer
@@ -13,36 +14,29 @@ from jova.utils.io import save_nested_cv_dataset_to_disk, load_nested_cv_dataset
     load_dataset_from_disk
 
 
-def load_davis(featurizer='Weave', cross_validation=False, test=False, split='random',
-               reload=True, K=5, mode='regression', predict_cold=False, cold_drug=False,
-               cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
-               prot_seq_dict=None, currdir="./", oversampled=False, input_protein=True, seed=0,
-               gnn_radius=2, simboost_mf_feats_dict=None):
+def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_validation=False, test=False, split='random',
+                     reload=True, K=5, mode='regression', predict_cold=False, cold_drug=False, cold_target=False,
+                     cold_drug_cluster=False, split_warm=False, filter_threshold=0, prot_seq_dict=None,
+                     oversampled=False, input_protein=True, seed=0, gnn_radius=2, simboost_mf_feats_dict=None):
     if cross_validation:
         assert not test
+
+    data_dir, file_name = os.path.split(dataset_file)
+
     feat_label = featurizer
-    data_dir = currdir + "davis_data/"
     gnn_fingerprint = None
     # for SimBoost, Kron-RLS and other kernel-based methods
     simboost_drug_target_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
+
     if input_protein:
-        if mode == 'regression' or mode == 'reg-threshold':
-            mode = 'regression'
-            tasks = ['davis']
-            file_name = "restructured.csv"
-            print("Data file:", file_name)
-        elif mode == 'classification':
-            tasks = ['davis_bin']
-            file_name = "restructured_bin.csv"
+        t_suffix = ''
+        if mode == 'classification':
+            t_suffix = '_bin'
+        # headers = list(pd.read_csv(os.path.join(data_dir, file_name), header=0, nrows=0))
+        tasks = [dataset_name + t_suffix]
     else:
-        if mode == 'regression' or mode == 'reg-threshold':
-            mode = 'regression'
-            file_name = "restructured_no_prot.csv"
-        elif mode == 'classification':
-            file_name = "restructured_bin_no_prot.csv"
         dataset_file = os.path.join(data_dir, file_name)
-        df = pd.read_csv(dataset_file, header=0, index_col=False)
-        headers = list(df)
+        headers = list(pd.read_csv(dataset_file, header=0, index_col=False, nrows=0))
         tasks = headers[:-1]
 
     if reload:
@@ -70,7 +64,7 @@ def load_davis(featurizer='Weave', cross_validation=False, test=False, split='ra
             simboost_drug_target_feats_dict = load_nested_cv_dataset_from_disk(save_dir, K)
         else:
             save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
-            loaded, all_dataset, transformers, fp,\
+            loaded, all_dataset, transformers, fp, \
             kernel_dicts, simboost_drug_target_feats_dict = load_dataset_from_disk(save_dir)
         if loaded:
             return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_drug_target_feats_dict
