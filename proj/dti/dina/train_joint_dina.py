@@ -20,6 +20,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
+
+import jova.utils.io
 from jova.trans import undo_transforms
 from soek import RealParam, DictParam
 from torch.utils.data import DataLoader
@@ -436,7 +438,7 @@ class IntegratedViewDTI(Trainer):
     def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
                        tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
-        model.load_state_dict(io.load_model(model_dir, model_name))
+        model.load_state_dict(jova.utils.io.load_model(model_dir, model_name))
         model.eval()
 
         print("Model evaluation...")
@@ -620,7 +622,7 @@ def main(flags):
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
                                                eval_fn=trainer.evaluate,
-                                               save_model_fn=io.save_model,
+                                               save_model_fn=jova.utils.io.save_model,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,
@@ -679,7 +681,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        io.save_model(model, flags["model_dir"],
+        jova.utils.io.save_model(model, flags["model_dir"],
                       "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
                                                      score))
 

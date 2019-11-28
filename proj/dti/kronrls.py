@@ -21,6 +21,7 @@ from soek import *
 from torch.nn.functional import mse_loss
 
 import jova.metrics as mt
+import jova.utils.io
 from jova.data import get_data, load_proteins
 from jova.data.data import Pair
 from jova.metrics import compute_model_performance
@@ -251,7 +252,7 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               save_model_fn=io.save_dict_model,
+                                               save_model_fn=jova.utils.io.save_dict_model,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,

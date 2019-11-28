@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import jova.metrics as mt
+import jova.utils.io
 from jova import cuda
 from jova.data import batch_collator, get_data, load_proteins, DtiDataset
 from jova.metrics import compute_model_performance
@@ -33,7 +34,7 @@ from jova.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, P
 from jova.trans import undo_transforms
 from jova.utils import Trainer, io
 from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
-from jova.utils.io import load_model, save_model, load_pickle
+from jova.utils.io import save_model, load_model, load_pickle
 from jova.utils.math import ExpAverage
 from jova.utils.train_helpers import count_parameters, FrozenModels
 
@@ -576,7 +577,7 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               save_model_fn=io.save_model,
+                                               save_model_fn=jova.utils.io.save_model,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,

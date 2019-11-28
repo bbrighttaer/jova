@@ -14,7 +14,7 @@ from time import gmtime, strftime
 
 import matplotlib.pyplot as plt
 import numpy as np
-from jova.utils.save import log
+from jova.utils.io import log
 from scipy.stats import pearsonr
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import auc

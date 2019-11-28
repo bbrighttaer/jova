@@ -14,10 +14,12 @@ import unittest
 import jova.utils.io as io
 from jova.utils.sim_data import DataNode
 
+import jova.utils.io
+
 
 class IO_Tests(unittest.TestCase):
     def test_logging(self):
-        logger = io.get_logger('Test_logger', filename='logger_test', level='info')
+        logger = jova.utils.io.get_logger('Test_logger', filename='logger_test', level='info')
         self.assertIsNotNone(logger, 'No logger returned')
 
     def test_data_node(self):

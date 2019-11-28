@@ -10,7 +10,7 @@ import pandas as pd
 import jova
 import jova.splits as splits
 from jova.feat import GNNFeaturizer
-from jova.utils.io import save_nested_cv_dataset_to_disk, load_nested_cv_dataset_from_disk, save_dataset_to_disk, \
+from jova.utils.io import save_nested_cv_dataset_to_disk, save_dataset_to_disk, load_nested_cv_dataset_from_disk, \
     load_dataset_from_disk
 
 

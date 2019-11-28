@@ -25,9 +25,9 @@ from collections import OrderedDict
 import jova
 from jova.data import DiskDataset
 from jova.utils import ScaffoldGenerator
-from jova.utils.save import log
+from jova.utils.io import log
 from jova.data import NumpyDataset
-from jova.utils.save import load_data
+from jova.utils.io import load_data
 from rdkit import Chem
 from rdkit import DataStructs
 from rdkit.Chem import rdMolDescriptors

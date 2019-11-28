@@ -19,8 +19,8 @@ from rdkit.Chem import rdmolops
 from jova.data import DiskDataset
 from jova.feat import Protein
 from jova.feat import UserDefinedFeaturizer
-from jova.utils.save import load_csv_files
-from jova.utils.save import log
+from jova.utils.io import load_csv_files
+from jova.utils.io import log
 
 __all__ = ['CSVLoader', 'DataLoader']
 

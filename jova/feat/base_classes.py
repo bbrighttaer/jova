@@ -2,7 +2,7 @@
 Feature calculations.
 """
 import numpy as np
-from jova.utils.save import log
+from jova.utils.io import log
 
 __author__ = "Steven Kearnes, modified by Qingyuan Feng"
 __copyright__ = "Copyright 2014, Stanford University"

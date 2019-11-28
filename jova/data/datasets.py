@@ -18,9 +18,9 @@ import jova
 import numpy as np
 import pandas as pd
 
-from jova.utils.save import load_from_disk
-from jova.utils.save import log
-from jova.utils.save import save_to_disk, save_metadata
+from jova.utils.io import load_from_disk
+from jova.utils.io import log
+from jova.utils.io import save_to_disk, save_metadata
 
 __author__ = "Bharath Ramsundar, modified by Qingyuan Feng"
 __copyright__ = "Copyright 2016, Stanford University"
@@ -1276,7 +1276,7 @@ class DiskDataset(Dataset):
     def remove_validation_set_entries(self, save_dir_val_set=None):
         if save_dir_val_set is None:
             raise ValueError('save_dir_val_set cannot be None.')
-        loaded, all_dataset, _ = jova.utils.save.load_dataset_from_disk(save_dir_val_set)
+        loaded, all_dataset, _ = jova.utils.io.load_dataset_from_disk(save_dir_val_set)
         if not loaded:
             raise ValueError('The save_dir_val_set does not give a loadable dataset.')
         _, validation_set, _ = all_dataset
