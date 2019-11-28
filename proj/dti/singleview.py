@@ -19,10 +19,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
-from deepchem.trans import undo_transforms
-from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, DictParam
-from soek.rand import RandomSearchCV
+from soek import *
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -34,11 +31,11 @@ from jova.metrics import compute_model_performance
 from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather, LambdaLayer, Reshape
 from jova.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, PairSequential, GraphNeuralNet, Prot2Vec, \
     ProteinRNN, ProteinCNNAttention, ProtCnnForward
+from jova.trans import undo_transforms
 from jova.utils import Trainer, io
 from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from jova.utils.io import load_model, save_model, load_pickle
 from jova.utils.math import ExpAverage, Count
-from jova.utils.sim_data import DataNode
 from jova.utils.tb import TBMeanTracker
 from jova.utils.train_helpers import count_parameters
 
@@ -652,7 +649,7 @@ def main(flags):
                              prot_profile, summary_writer_creator)
 
         # save simulation data resource tree to file.
-        # sim_data.to_json(path="./analysis/")
+        sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,

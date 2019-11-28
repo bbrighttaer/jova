@@ -16,7 +16,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from rdkit import Chem
-from sklearn.externals import joblib as old_joblib
+# from sklearn.externals import joblib as old_joblib
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
 import jova
@@ -211,13 +211,14 @@ def load_from_disk(filename):
     if os.path.splitext(name)[1] == ".pkl":
         return load_pickle_from_disk(filename)
     elif os.path.splitext(name)[1] == ".joblib":
-        try:
-            return joblib.load(filename)
-        except KeyError:
-            # Try older joblib version for legacy files.
-            return old_joblib.load(filename)
-        except ValueError:
-            return old_joblib.load(filename)
+        return joblib.load(filename)
+        # try:
+        #     return joblib.load(filename)
+        # except KeyError:
+        #     # Try older joblib version for legacy files.
+        #     return old_joblib.load(filename)
+        # except ValueError:
+        #     return old_joblib.load(filename)
     elif os.path.splitext(name)[1] == ".csv":
         # First line of user-specified CSV *must* be header.
         df = pd.read_csv(filename, header=0)

@@ -20,11 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
-from deepchem.trans import undo_transforms
-from soek import RealParam, DictParam
-from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
-from soek.rand import RandomSearchCV
+from soek import *
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -37,12 +33,12 @@ from jova.metrics import compute_model_performance
 from jova.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D, ElementwiseBatchNorm
 from jova.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN, \
     GraphNeuralNet2D, ProteinCNN2D, ProteinCNN
+from jova.trans import undo_transforms
 from jova.utils import Trainer, io
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from jova.utils.attn_helpers import MultimodalAttentionData
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
-from jova.utils.sim_data import DataNode
 from jova.utils.tb import TBMeanTracker
 from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels, ViewsReg
 
@@ -768,7 +764,7 @@ def main(flags):
         # Simulation data resource tree
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        dataset_lbl = flags["dataset"]
+        dataset_lbl = flags["dataset_name"]
 
         if flags["eval"]:
             mode = "eval"
@@ -1158,10 +1154,13 @@ class Flags(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
-    parser.add_argument("--dataset",
+    parser.add_argument("--dataset_name",
                         type=str,
                         default="davis",
                         help="Dataset name.")
+    parser.add_argument("--dataset_file",
+                        type=str,
+                        help="Dataset file.")
 
     # Either CV or standard train-val(-test) split.
     scheme = parser.add_mutually_exclusive_group()
@@ -1240,10 +1239,10 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    parser.add_argument('--data_dir',
-                        type=str,
-                        default='../../data/',
-                        help='Root folder of data (Davis, KIBA, Metz) folders.')
+    # parser.add_argument('--data_dir',
+    #                     type=str,
+    #                     default='../../data/',
+    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")

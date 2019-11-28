@@ -14,21 +14,18 @@ import random
 import time
 from collections import defaultdict
 from datetime import datetime as dt
-import torch
-from torch.nn.functional import mse_loss
+
 import numpy as np
-from soek import RealParam
-from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam
-from soek.rand import RandomSearchCV
+import torch
+from soek import *
+from torch.nn.functional import mse_loss
 
 import jova.metrics as mt
 from jova.data import get_data, load_proteins
 from jova.data.data import Pair
 from jova.metrics import compute_model_performance
 from jova.utils import Trainer, io
-from jova.utils.io import save_model, save_dict_model
-from jova.utils.sim_data import DataNode
+from jova.utils.io import save_dict_model
 from jova.utils.thread import UnboundedProgressbar
 
 currentDT = dt.now()
@@ -185,7 +182,7 @@ def main(flags):
         # Simulation data resource tree
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        dataset_lbl = flags["dataset"]
+        dataset_lbl = flags["dataset_name"]
         node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
                                                 "eval" if flags["eval"] else "train", date_label)
         sim_data = DataNode(label=node_label)
@@ -353,10 +350,13 @@ class Flags(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Kronecker Regularized Least Squares (Pahikkala et al., 2014")
 
-    parser.add_argument("--dataset",
+    parser.add_argument("--dataset_name",
                         type=str,
                         default="davis",
                         help="Dataset name.")
+    parser.add_argument("--dataset_file",
+                        type=str,
+                        help="Dataset file.")
 
     # Either CV or standard train-val(-test) split.
     scheme = parser.add_mutually_exclusive_group()
@@ -422,10 +422,10 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    parser.add_argument('--data_dir',
-                        type=str,
-                        default='../../data/',
-                        help='Root folder of data (Davis, KIBA, Metz) folders.')
+    # parser.add_argument('--data_dir',
+    #                     type=str,
+    #                     default='../../data/',
+    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")

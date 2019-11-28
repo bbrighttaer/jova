@@ -18,6 +18,5 @@ import jova.splits as splits
 import jova.data as data
 import jova.feat as feat
 import jova.metrics as metrics
-import jova.molnet as molnet
 import jova.nn as nn
 import jova.utils as utils

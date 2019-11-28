@@ -11,7 +11,7 @@ from __future__ import unicode_literals
 
 import numpy as np
 import torch
-from padme.feat.mol_graphs import ConvMol
+from jova.feat.mol_graphs import ConvMol
 
 
 def process_weave_input(mols):

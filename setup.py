@@ -17,6 +17,6 @@ setup(
     author='Brighter Agyemang',
     author_email='brighteragyemang@gmail.com',
     description='',
-    install_requires=['torch', 'numpy', 'scikit-optimize', 'padme', 'pandas', 'matplotlib', 'seaborn', 'soek',
-                      'biopython', 'deepchem']
+    install_requires=['torch', 'numpy', 'scikit-optimize', 'pandas', 'matplotlib', 'seaborn', 'soek', 'biopython',
+                      'joblib', 'scikit-learn']
 )

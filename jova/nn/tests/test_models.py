@@ -5,20 +5,19 @@
 # File: test_models.py
 
 
-from __future__ import print_function
 from __future__ import division
+from __future__ import print_function
 from __future__ import unicode_literals
 
 import unittest
-import torch
-import torch.nn as nn
-from jova.nn.layers import Linear
-from jova.nn.models import WeaveModel, GraphConvModel
-from jova.utils.args import FcnArgs, ConvArgs, PoolingArg, WeaveGatherArgs, WeaveLayerArgs, GraphConvArgs
-import pandas as pd
-import deepchem as dc
-import rdkit.Chem as ch
 
+import pandas as pd
+import rdkit.Chem as ch
+import torch
+
+import jova
+from jova.nn.models import WeaveModel, GraphConvModel
+from jova.utils.args import WeaveGatherArgs, WeaveLayerArgs, GraphConvArgs
 from jova.utils.mols import process_weave_input, process_graph_conv_input
 
 
@@ -36,7 +35,7 @@ class TestModels(unittest.TestCase):
         self.mols = [ch.MolFromSmiles(s) for s in self.smiles]
 
     def test_weave_model(self):
-        feat_weave = dc.feat.WeaveFeaturizer()
+        feat_weave = jova.feat.WeaveFeaturizer()
         mols_feat = feat_weave(self.mols)
         self.assertEqual(len(mols_feat), len(self.mols))
         atom_features, pair_features, pair_split, atom_split, atom_to_pair = process_weave_input(mols_feat)
@@ -76,7 +75,7 @@ class TestModels(unittest.TestCase):
             print(param.shape)
 
     def test_graph_conv_model(self):
-        feat_graph_conv = dc.feat.ConvMolFeaturizer()
+        feat_graph_conv = jova.feat.ConvMolFeaturizer()
         mols = feat_graph_conv(self.mols)
         self.assertEqual(len(mols), len(self.mols))
         input_data = process_graph_conv_input(mols)

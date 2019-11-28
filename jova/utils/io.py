@@ -11,8 +11,6 @@ from __future__ import unicode_literals
 
 import pickle
 
-import deepchem
-import padme
 
 __author__ = 'Brighter Agyemang'
 
@@ -21,7 +19,7 @@ import logging
 import sys
 import torch
 import numpy as np
-
+import jova
 
 def get_logger(name=None, level='INFO', stream='stderr', filename=None, log_dir='./logs/'):
     """
@@ -186,9 +184,9 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
         test_dir = os.path.join(fold_dir, "test_dir")
         if not os.path.exists(train_dir):
             return False, None, list(), None, None, None
-        train = padme.data.DiskDataset(train_dir)
-        valid = padme.data.DiskDataset(valid_dir) if os.path.exists(valid_dir) else None
-        test = padme.data.DiskDataset(test_dir) if os.path.exists(test_dir) else None
+        train = jova.data.DiskDataset(train_dir)
+        valid = jova.data.DiskDataset(valid_dir) if os.path.exists(valid_dir) else None
+        test = jova.data.DiskDataset(test_dir) if os.path.exists(test_dir) else None
         train_data.append(train)
         valid_data.append(valid)
         test_data.append(test)
@@ -260,9 +258,9 @@ def load_dataset_from_disk(save_dir):
             simboost_pairwise_feats_dict = pickle.load(f)
 
     loaded = True
-    train = deepchem.data.DiskDataset(train_dir)
-    valid = deepchem.data.DiskDataset(valid_dir) if os.path.exists(valid_dir) else None
-    test = deepchem.data.DiskDataset(test_dir) if os.path.exists(test_dir) else None
+    train = jova.data.DiskDataset(train_dir)
+    valid = jova.data.DiskDataset(valid_dir) if os.path.exists(valid_dir) else None
+    test = jova.data.DiskDataset(test_dir) if os.path.exists(test_dir) else None
     all_dataset = (train, valid, test)
     with open(os.path.join(save_dir, "transformers.pkl"), 'rb') as f:
         transformers = pickle.load(f)

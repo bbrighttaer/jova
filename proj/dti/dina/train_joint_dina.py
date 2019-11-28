@@ -20,7 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
-from deepchem.trans import undo_transforms
+from jova.trans import undo_transforms
 from soek import RealParam, DictParam
 from torch.utils.data import DataLoader
 from tqdm import tqdm

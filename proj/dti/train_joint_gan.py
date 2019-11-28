@@ -20,31 +20,24 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
-from deepchem.trans import undo_transforms
-from torch.utils.tensorboard import SummaryWriter
-
-from jova.utils.tb import TBMeanTracker
-
-from jova.utils.math import ExpAverage, Count
-
-from jova.utils.io import load_model, save_model
-
-from jova.utils.train_helpers import count_parameters
+from soek import *
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import jova.metrics as mt
 from jova import cuda
 from jova.data import batch_collator, get_data, load_proteins, DtiDataset
-from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam, RealParam
-from soek.rand import RandomSearchCV
 from jova.metrics import compute_model_performance
 from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather
 from jova.nn.models import GraphConvSequential, PairSequential, create_fcn_layers
+from jova.trans import undo_transforms
 from jova.utils import Trainer, io
 from jova.utils.args import FcnArgs
-from jova.utils.sim_data import DataNode
+from jova.utils.io import load_model, save_model
+from jova.utils.math import ExpAverage, Count
+from jova.utils.tb import TBMeanTracker
+from jova.utils.train_helpers import count_parameters
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -54,7 +47,7 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(0)
 
 
 def create_integrated_net(hparams):
@@ -546,7 +539,7 @@ def main(flags):
     # Simulation data resource tree
     split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
         flags["cold_drug"] else "None"
-    dataset_lbl = flags["dataset"]
+    dataset_lbl = flags["dataset_name"]
     node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
                                          date_label)
     sim_data = DataNode(label=node_label)
@@ -815,10 +808,13 @@ def verify_multiview_data(data_dict):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="DTI with ivpgan model training.")
 
-    parser.add_argument("--dataset",
+    parser.add_argument("--dataset_name",
                         type=str,
                         default="davis",
                         help="Dataset name.")
+    parser.add_argument("--dataset_file",
+                        type=str,
+                        help="Dataset file.")
 
     # Either CV or standard train-val(-test) split.
     scheme = parser.add_mutually_exclusive_group()
@@ -884,10 +880,10 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    parser.add_argument('--data_dir',
-                        type=str,
-                        default='../../data/',
-                        help='Root folder of data (Davis, KIBA, Metz) folders.')
+    # parser.add_argument('--data_dir',
+    #                     type=str,
+    #                     default='../../data/',
+    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -906,7 +902,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     FLAGS = dict()
-    FLAGS['dataset'] = args.dataset
+    FLAGS['dataset_name'] = args.dataset_name
+    FLAGS['dataset_file'] = args.dataset_file
     FLAGS['fold_num'] = args.fold_num
     FLAGS['cv'] = True if FLAGS['fold_num'] > 2 else False
     FLAGS['test'] = args.test
@@ -920,7 +917,7 @@ if __name__ == '__main__':
     FLAGS['model_name'] = args.model_name
     FLAGS['prot_desc_path'] = args.prot_desc_path
     FLAGS['reload'] = args.reload
-    FLAGS['data_dir'] = args.data_dir
+    # FLAGS['data_dir'] = args.data_dir
     FLAGS['split_warm'] = args.split_warm
     FLAGS['hparam_search'] = args.hparam_search
     FLAGS["hparam_search_alg"] = args.hparam_search_alg

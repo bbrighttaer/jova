@@ -20,11 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
-from deepchem.trans import undo_transforms
-from soek import RealParam, DictParam
-from soek.bopt import BayesianOptSearchCV
-from soek.params import ConstantParam, LogRealParam, DiscreteParam, CategoricalParam
-from soek.rand import RandomSearchCV
+from soek import *
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -35,18 +31,18 @@ from jova.metrics import compute_model_performance
 from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather2D, PreSiameseLinear, SiameseLinear, \
     SiameseBatchNorm, SiameseNonlinearity, SiameseDropout, PairwiseDotProduct
 from jova.nn.models import GraphConvSequential, WeaveModel, ProteinRNN, TwoWayForward, TwoWayAttention, Prot2Vec
+from jova.trans import undo_transforms
 from jova.utils import Trainer, io
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
-from jova.utils.io import load_pickle, load_numpy_array
+from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage
-from jova.utils.sim_data import DataNode
 from jova.utils.train_helpers import count_parameters, FrozenModels
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [1, 8, 64]
-seeds = [123, 124, 125]
+seeds = [1, 8, 64]
+# seeds = [123, 124, 125]
 check_data = False
 
 torch.cuda.set_device(0)
@@ -527,7 +523,7 @@ def main(flags):
     # Simulation data resource tree
     split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
         flags["cold_drug"] else "None"
-    dataset_lbl = flags["dataset"]
+    dataset_lbl = flags["dataset_name"]
     node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
                                          date_label)
     sim_data = DataNode(label=node_label)
@@ -849,10 +845,13 @@ class Flags(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
-    parser.add_argument("--dataset",
+    parser.add_argument("--dataset_name",
                         type=str,
                         default="davis",
                         help="Dataset name.")
+    parser.add_argument("--dataset_file",
+                        type=str,
+                        help="Dataset file.")
 
     # Either CV or standard train-val(-test) split.
     scheme = parser.add_mutually_exclusive_group()
@@ -926,10 +925,10 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    parser.add_argument('--data_dir',
-                        type=str,
-                        default='../../data/',
-                        help='Root folder of data (Davis, KIBA, Metz) folders.')
+    # parser.add_argument('--data_dir',
+    #                     type=str,
+    #                     default='../../data/',
+    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")

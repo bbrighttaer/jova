@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import torch
 from Bio import Align
-from padme.feat.mol_graphs import ConvMol
+from jova.feat.mol_graphs import ConvMol
 from rdkit.Chem import DataStructs
 from torch.utils.data import dataset as ds
 

@@ -11,12 +11,11 @@ from __future__ import unicode_literals
 
 import unittest
 
-import deepchem as dc
-import padme
 import pandas as pd
 import rdkit.Chem as ch
 import torch
-from torch.autograd import Variable, gradcheck
+import jova
+from torch.autograd import gradcheck
 
 from jova.nn.layers import WeaveLayer, WeaveGather, GraphConvLayer, GraphPool, GraphGather
 from jova.utils.mols import process_weave_input, process_graph_conv_input
@@ -36,7 +35,7 @@ class TestLayers(unittest.TestCase):
         self.mols = [ch.MolFromSmiles(s) for s in self.smiles]
 
     def test_weave_layer(self):
-        feat_weave = padme.feat.WeaveFeaturizer()
+        feat_weave = jova.feat.WeaveFeaturizer()
         mols_feat = feat_weave(self.mols)
         self.assertEqual(len(mols_feat), len(self.mols))
         atom_features, pair_features, pair_split, atom_split, atom_to_pair = process_weave_input(mols_feat)
@@ -76,7 +75,7 @@ class TestLayers(unittest.TestCase):
             print(p.size())
 
     def test_graph_conv_layer(self):
-        feat_graph_conv = padme.feat.ConvMolFeaturizer()
+        feat_graph_conv = jova.feat.ConvMolFeaturizer()
         mols = feat_graph_conv(self.mols)
         self.assertEqual(len(mols), len(self.mols))
         input_data = process_graph_conv_input(mols)
