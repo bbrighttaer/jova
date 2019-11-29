@@ -54,7 +54,7 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(3)
 
 views_reg = ViewsReg()
 
@@ -820,16 +820,16 @@ def main(flags):
                                                        flags["hparam_search_alg"], sim_label, date_label,
                                                        total_iterations, min_opt))
 
-                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30, seed=seed)
+                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
                     print(stats)
-                    print("Best params = {}".format(stats.best(m="max")))
+                    print("Best params = {}".format(stats.best()))
                 else:
                     invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node,
                                  sim_label,
                                  prot_profile, pretrained_embeddings, summary_writer_creator)
 
         # save simulation data resource tree to file.
-        # sim_data.to_json(path="./analysis/")
+        sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, protein_profile,
