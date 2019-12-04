@@ -24,14 +24,15 @@ import jova.metrics as mt
 from jova.data import get_data, load_proteins
 from jova.data.data import Pair
 from jova.metrics import compute_model_performance
+from jova.trans import undo_transforms
 from jova.utils import Trainer
-from jova.utils.io import load_dict_model
+from jova.utils.io import load_dict_model, load_pickle
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
-seeds = [1, 8, 64]
+seeds = [1]  # , 8, 64]
 
 
 class SimBoost(Trainer):
@@ -78,13 +79,19 @@ class SimBoost(Trainer):
         return score
 
     @staticmethod
-    def train(xgb_params, data, metrics, transformer, simboost_feats_dict, tasks, epochs=3000, is_hsearch=False,
+    def train(xgb_params, data, metrics, transformer, simboost_feats_dict, tasks, n_iters=3000, is_hsearch=False,
               sim_data_node=None):
         start = time.time()
         metrics_dict = {}
         metrics_node = DataNode(label="validation_metrics", data=metrics_dict)
+        scores_lst = []
+        scores_node = DataNode(label="validation_score", data=scores_lst)
+        predicted_vals = []
+        true_vals = []
+        model_preds_node = DataNode(label="model_predictions", data={"y": true_vals,
+                                                                     "y_pred": predicted_vals})
         if sim_data_node:
-            sim_data_node.data = [metrics_node]
+            sim_data_node.data = [metrics_node, scores_node, model_preds_node]
 
         # Data pre-processing
         xgb_data = {}
@@ -102,7 +109,7 @@ class SimBoost(Trainer):
         # training
         xgb_eval_results = {}
         eval_type = 'val' if is_hsearch else 'test'
-        model = xgb.train(xgb_params, xgb_data['train'], epochs,
+        model = xgb.train(xgb_params, xgb_data['train'], n_iters,
                           [(xgb_data['train'], 'train'), (xgb_data[eval_type], eval_type)],
                           early_stopping_rounds=10, evals_result=xgb_eval_results)
 
@@ -112,7 +119,15 @@ class SimBoost(Trainer):
         eval_dict = {}
         w = data[eval_type][2].reshape(-1, len(tasks))
         score = SimBoost.evaluate(eval_dict, y_true, y_hat, w, metrics, tasks, transformer)
-
+        for m in eval_dict:
+            if m in metrics_dict:
+                metrics_dict[m].append(eval_dict[m])
+            else:
+                metrics_dict[m] = [eval_dict[m]]
+        # apply transformers
+        predicted_vals.extend(undo_transforms(y_hat, transformer).squeeze().tolist())
+        true_vals.extend(undo_transforms(y_true, transformer).squeeze().tolist())
+        scores_lst.append(score)
         print('Evaluation: score={}, metrics={}'.format(score, eval_dict))
 
         duration = time.time() - start
@@ -120,23 +135,68 @@ class SimBoost(Trainer):
         return {'model': model, 'score': score, 'epoch': model.best_iteration}
 
     @staticmethod
-    def evaluate_model(model_path, data, metrics, transformer, simboost_feats_dict, tasks, epochs=50,
+    def evaluate_model(model_dir, model_name, data, metrics, transformer, simboost_feats_dict, tasks,
                        sim_data_node=None):
-        pass
+        start = time.time()
+        metrics_dict = {}
+        metrics_node = DataNode(label="validation_metrics", data=metrics_dict)
+        scores_lst = []
+        scores_node = DataNode(label="validation_score", data=scores_lst)
+        predicted_vals = []
+        true_vals = []
+        model_preds_node = DataNode(label="model_predictions", data={"y": true_vals,
+                                                                     "y_pred": predicted_vals})
+        if sim_data_node:
+            sim_data_node.data = [metrics_node, scores_node, model_preds_node]
+
+        # Data pre-processing
+        xgb_data = {}
+        for k in data:
+            ds = data[k]
+            dmat_x = []
+            dmat_y = []
+            for x, y, _ in zip(*ds):
+                comp, prot = x
+                dmat_x.append(simboost_feats_dict[Pair(comp, prot)])
+                dmat_y.append(float(y))
+            dmatrix = xgb.DMatrix(data=np.array(dmat_x), label=np.array(dmat_y))
+            xgb_data[k] = dmatrix
+
+        # load model
+        model = load_xgboost(model_dir, model_name)
+
+        # evaluation
+        eval_type = 'test'
+        y_hat = model.predict(xgb_data[eval_type]).reshape(-1, len(tasks))
+        y_true = xgb_data[eval_type].get_label().reshape(-1, len(tasks))
+        eval_dict = {}
+        w = data[eval_type][2].reshape(-1, len(tasks))
+        score = SimBoost.evaluate(eval_dict, y_true, y_hat, w, metrics, tasks, transformer)
+        for m in eval_dict:
+            if m in metrics_dict:
+                metrics_dict[m].append(eval_dict[m])
+            else:
+                metrics_dict[m] = [eval_dict[m]]
+        # apply transformers
+        predicted_vals.extend(undo_transforms(y_hat, transformer).squeeze().tolist())
+        true_vals.extend(undo_transforms(y_true, transformer).squeeze().tolist())
+        scores_lst.append(score)
+        print('Evaluation: score={}, metrics={}'.format(score, eval_dict))
+
+        duration = time.time() - start
+        print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
 
 
 def save_xgboost(model, path, name):
     os.makedirs(path, exist_ok=True)
-    # with open(os.path.join(path, name + '.pkl'), 'wb') as f:
-    #     pickle.dump(model, f)
-    with open(os.path.join(path, "simboost_dummy_save.txt"), 'a') as f:
-        f.write(name + '\n')
+    with open(os.path.join(path, name + '.pkl'), 'wb') as f:
+        pickle.dump(model, f)
+    # with open(os.path.join(path, "simboost_dummy_save.txt"), 'a') as f:
+    #     f.write(name + '\n')
 
 
 def load_xgboost(path, name):
-    path = os.path.join(path, name)
-    if os.path.exists(path):
-        return pickle.load(path)
+    return load_pickle(os.path.join(path, name))
 
 
 def main(flags):
@@ -154,8 +214,8 @@ def main(flags):
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         dataset_lbl = flags["dataset_name"]
-        node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
-                                                "eval" if flags["eval"] else "train", date_label)
+        node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
+                                             date_label)
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list
@@ -267,17 +327,19 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transfo
     model, data, metrics = trainer.initialize(hparams=hyper_params, train_dataset=data["train"],
                                               val_dataset=data["val"], test_dataset=data["test"])
     if flags["eval"]:
-        pass
+        trainer.evaluate_model(flags.model_dir, flags.eval_model_name, data, metrics, transformer, simboost_feats_dict,
+                               tasks, sim_data_node)
     else:
         # Train the model
         results = trainer.train(model, data, metrics, transformer, simboost_feats_dict, tasks=tasks,
-                                sim_data_node=sim_data_node)
+                                sim_data_node=sim_data_node, n_iters=10000)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         save_xgboost(model, flags["model_dir"],
-                     "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
+                     "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"], split_label,
+                                                    epoch,
                                                     score))
 
 
@@ -290,14 +352,14 @@ def default_hparams_rand(flags, seed):
 def default_hparams_bopt(flags, seed):
     return {
         'seed': seed,
-        'objective': 'reg:squarederror',  # reg:linear
-        'max_depth': 5,
-        'subsample': 0.8,
-        'colsample_bytree': .7,
-        'n_estimators': 100,
+        'objective': 'reg:squarederror',
+        'max_depth': 10,
+        'subsample': 1.0,
+        'colsample_bytree': .5,
+        'n_estimators': 50,
         'gamma': .1,
-        'reg_lambda': 0.5,
-        'learning_rate': 0.1,
+        'reg_lambda': 0.7427012361969033,
+        'learning_rate': 0.1078028400493326,
     }
 
 

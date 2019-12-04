@@ -35,7 +35,7 @@ from jova.nn.layers import GraphConvLayer, GraphPool, Unsqueeze, GraphGather2D, 
 from jova.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAttention, Prot2Vec, ProteinRNN, \
     GraphNeuralNet2D, ProteinCNN2D, ProteinCNN
 from jova.trans import undo_transforms
-from jova.utils import Trainer, io
+from jova.utils import Trainer
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from jova.utils.attn_helpers import MultimodalAttentionData
 from jova.utils.io import load_pickle
@@ -46,13 +46,13 @@ from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels, 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1, 8, 64]
-# seeds = [64]
+# seeds = [1, 8, 64]
+seeds = [7, 491]  # [100, 7, 491]
 # seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 joint_attention_data = MultimodalAttentionData()
 
@@ -570,7 +570,7 @@ class Jova(Trainer):
 
         # Main evaluation loop
         i = 0
-        for batch in tqdm(data_loaders['val']):
+        for batch in tqdm(data_loaders['test']):
             spec = {v: True for v in views_reg.c_views}
             batch_size, data = batch_collator(batch, prot_desc_dict, spec, cuda_prot=True)
 
@@ -659,7 +659,7 @@ class Jova(Trainer):
 
         # Main evaluation loop
         i = 0
-        for batch in tqdm(data_loaders['val']):
+        for batch in tqdm(data_loaders['test']):
             if i == max_print:
                 print('\nMaximum number [%d] of samples limit reached. Terminating...' % i)
                 break
@@ -854,7 +854,7 @@ def main(flags):
                         search_alg = {"random_search": RandomSearchCV,
                                       "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
                                                                                 BayesianOptSearchCV)
-                        min_opt = "gp"
+                        min_opt = "gbrt"
                         hparam_search = search_alg(hparam_config=hparams_conf,
                                                    num_folds=k,
                                                    initializer=trainer.initialize,
@@ -874,7 +874,7 @@ def main(flags):
 
                     stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
                     print(stats)
-                    print("Best params = {}".format(stats.best(m="max")))
+                    print("Best params = {}".format(stats.best()))
                 else:
                     invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node,
                                  sim_label,
@@ -928,8 +928,9 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         jova.utils.io.save_model(model, flags["model_dir"],
-                      "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
-                                                     score))
+                                 "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"],
+                                                                split_label, epoch,
+                                                                score))
 
 
 def default_hparams_rand(flags):

@@ -33,7 +33,7 @@ from jova.metrics import compute_model_performance
 from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather
 from jova.nn.models import GraphConvSequential, PairSequential, create_fcn_layers
 from jova.trans import undo_transforms
-from jova.utils import Trainer, io
+from jova.utils import Trainer
 from jova.utils.args import FcnArgs
 from jova.utils.io import save_model, load_model
 from jova.utils.math import ExpAverage, Count
@@ -44,7 +44,7 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
-seeds = [1, 8, 64]
+seeds = [1]  # , 8, 64]
 
 check_data = False
 
@@ -470,7 +470,7 @@ class IVPGAN(Trainer):
         # Main evaluation loop
         for epoch in range(n_epochs):
 
-            for phase in ["test"]:  # ["train", "val"]:
+            for phase in ["test"]:
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
@@ -488,8 +488,8 @@ class IVPGAN(Trainer):
                             Xs["gconv"] = x
                         else:
                             Xs[view_name] = view_data[0]
-                        Ys[view_name] = view_data[1]
-                        Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
+                        Ys[view_name] = np.array([k for k in view_data[1]], dtype=np.float)
+                        Ws[view_name] = np.array([k for k in view_data[2]], dtype=np.float)
 
                     # forward propagation
                     with torch.set_grad_enabled(False):
@@ -498,10 +498,14 @@ class IVPGAN(Trainer):
                         for i in range(1, len(Ys.values())):
                             assert (list(Ys.values())[i - 1] == list(Ys.values())[i]).all()
 
-                        y_true = Ys["gconv"]
-                        w = Ws["gconv"]
+                        y_true = Ys[list(Xs.keys())[0]]
+                        w = Ws[list(Xs.keys())[0]]
+                        weights = torch.from_numpy(w).float()
                         X = ((Xs["gconv"][0], Xs["ecfp8"][0]), Xs["gconv"][1])
                         y_predicted = model(X)
+                        if cuda:
+                            weights = weights.cuda()
+                        y_predicted = y_predicted * weights
 
                         # apply transformers
                         predicted_vals.extend(undo_transforms(y_predicted.cpu().detach().numpy(),
@@ -644,7 +648,7 @@ def main(flags):
                              sim_label, summary_writer_creator)
 
     # save simulation data resource tree to file.
-    # sim_data.to_json(path="./analysis/")
+    sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, tb_writer, view):
@@ -678,7 +682,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     else:
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, weighted_loss,
-                                n_dist, transformers_dict, prot_desc_dict, tasks, max_iter=10000,
+                                n_dist, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
                                 sim_data_node=sim_data_node, tb_writer=tb_writer)
         model, score, epoch = results['model'], results['score'], results['epoch']
 
@@ -686,7 +690,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         save_model(model, flags["model_dir"],
-                   "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
+                   "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"], split_label, epoch,
                                                   score))
 
 
@@ -728,33 +732,31 @@ def default_hparams_bopt(flags):
     return {
         "prot_dim": 8421,
         "fp_dim": 1024,
-        "gconv_dim": 128,
-        "hdims": [2286, 1669, 2590],
-        "disc_hdims": [724, 561],
+        "gconv_dim": 512,
+        "hdims": [1686, 3922, 981],
+        "disc_hdims": [1447],
 
         # weight initialization
         "kaiming_constant": 5,
 
-        "weighted_loss": 0.3,
+        "weighted_loss": 0.7881333132164487,
 
         # dropout
-        "dprob": 0.0519347,
+        "dprob": 0.5206534148323471,
 
-        "neigh_dist": 10,
+        "neigh_dist": 38,
 
         "tr_batch_size": 256,
-        "val_batch_size": 512,
-        "test_batch_size": 512,
+        "val_batch_size": 128,
+        "test_batch_size": 128,
 
         # optimizer params
         "optimizer_gen": "adagrad",
-        "optimizer_gen__global__weight_decay": 0.00312756,
-        "optimizer_gen__global__lr": 0.000867065,
-        "optimizer_gen__adadelta__rho": 0.115873,
-        "optimizer_gen__adagrad__lr_decay": 0.000496165,
-        "optimizer_disc": "adadelta",
-        "optimizer_disc__global__weight_decay": 0.0540819,
-        "optimizer_disc__global__lr": 0.464296
+        "optimizer_gen__global__weight_decay": 0.00019068915055028382,
+        "optimizer_gen__global__lr": 0.007760686713229159,
+        "optimizer_disc": "adamax",
+        "optimizer_disc__global__weight_decay": 0.0005859010994270156,
+        "optimizer_disc__global__lr": 0.0071985663751058335
     }
 
 

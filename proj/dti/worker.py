@@ -5,17 +5,17 @@
 # File: worker.py
 
 
-from __future__ import print_function
 from __future__ import division
+from __future__ import print_function
 from __future__ import unicode_literals
 
-import os
-import pandas as pd
-import numpy as np
 import json
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-from scipy.stats import pearsonr
 
 
 def get_resources(root, queries):
@@ -79,8 +79,9 @@ def retrieve_resource_cv(k, seeds, r_name, r_data, res_names):
 if __name__ == '__main__':
     chart_type = "png"
     folder = "analysis"
-    qualifier = "davis_ecfp8_psc_cold_drug_eval_2019_11_19__17_19_23"
+    qualifier = "KronRLS"
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
+    print('Number of files loaded=', len(files))
     files.sort()
     results_folder = "results_" + folder + '_' + chart_type
     os.makedirs(results_folder, exist_ok=True)
@@ -92,7 +93,7 @@ if __name__ == '__main__':
             data = json.load(f)
 
         root_name = file.split(".j")[0]
-        data_dict = retrieve_resource_cv(k=5, seeds=[1, 8, 64], r_name=root_name, r_data=data,
+        data_dict = retrieve_resource_cv(k=5, seeds=[1], r_name=root_name, r_data=data,
                                          res_names=[
                                              ("validation_metrics/nanmean-rms_score", 0),
                                              ("validation_metrics/nanmean-concordance_index", 0),
@@ -141,13 +142,27 @@ if __name__ == '__main__':
         # f1.set_axis_labels("predicted value", "true value")
         # f1.set(xlabel="predicted value", ylabel="true value")
         fig.savefig("./{}/{}_true-vs-pred.{}".format(results_folder, root_name, chart_type))
-        plt.close(f1.fig)
 
         sns.set_style("white")
         f2 = sns.jointplot(x="predicted value", y="true value", data=data, kind='kde')  # , stat_func=pearsonr)
         # f2.annotate(pearsonr)
         # f2.set_axis_labels("predicted value", "true value")
         f2.savefig("./{}/{}_joint.{}".format(results_folder, root_name, chart_type))
-        plt.close(f2.fig)
+        plt.close('all')
+
+        # plot neighborhood histogram
+        # plt.title(title)
+        array_h1, array_v1 = np.meshgrid(y_true, y_true)
+        array_nvals1 = np.sort(np.abs(array_v1 - array_h1), axis=1)
+        plt.hist(array_nvals1.reshape(-1, ), bins=20, label='y_true', alpha=0.5)
+
+        array_h2, array_v2 = np.meshgrid(y_pred, y_pred)
+        array_nvals2 = np.sort(np.abs(array_v2 - array_h2), axis=1)
+        plt.hist(array_nvals2.reshape(-1, ), bins=20, label='y_pred', alpha=0.5)
+
+        plt.legend(loc='best')
+        plt.savefig(os.path.join(results_folder, root_name + 'neighborhood.' + chart_type))
+
+        plt.close('all')
 
         print('-' * 100)

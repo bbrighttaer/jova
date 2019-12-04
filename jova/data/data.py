@@ -20,12 +20,12 @@ import numpy as np
 import pandas as pd
 import torch
 from Bio import Align
-from jova.feat.mol_graphs import ConvMol
 from rdkit.Chem import DataStructs
 from torch.utils.data import dataset as ds
 
 from jova import cuda as _cuda
 from jova.data import load_csv_dataset
+from jova.feat.mol_graphs import ConvMol
 from jova.utils.math import block_diag_irregular
 from jova.utils.thread import UnboundedProgressbar
 from jova.utils.train_helpers import ViewsReg
@@ -382,7 +382,7 @@ def compute_similarity_kernel_matrices(dataset):
     :return: tuple
     """
     start = time.time()
-    print("About to compute kernel matrices")
+    print("Computing kernel matrices (KD_dict, KT_dict)")
     all_comps = set()
     all_prots = set()
     for idx, pair in enumerate(dataset.X):
@@ -658,3 +658,72 @@ def featurize_datasets(jova_args, feat_dict, flags, prot_seq_dict, seeds):
                 comp_views.add(cv)
         for v in comp_views:
             get_data(feat_dict[v], flags, prot_sequences=prot_seq_dict, seed=seed)
+
+
+def compute_train_val_test_kronrls_mats(train, val, test, Kd_dict, Kt_dict):
+    """
+
+    :param train:
+    :param val:
+    :param test:
+    :param Kd_dict:
+    :param Kt_dict:
+    :return:
+    """
+    # Construct KD and KT
+    train_mol = set()
+    train_prot = set()
+    labels = defaultdict(lambda: np.nan)
+    weights = defaultdict(lambda: float())
+    for x, y, w, _ in train.itersamples():
+        mol, prot = x
+        train_mol.add(mol)
+        train_prot.add(prot)
+        labels[Pair(mol, prot)] = float(y)
+        weights[Pair(mol, prot)] = float(w)
+    KD = np.array([[Kd_dict[Pair(c1, c2)] for c2 in train_mol] for c1 in train_mol], dtype=np.float)
+    KT = np.array([[Kt_dict[Pair(p1, p2)] for p2 in train_prot] for p1 in train_prot], dtype=np.float)
+    Y = np.array([[labels[Pair(c, p)] for p in train_prot] for c in train_mol], dtype=np.float)
+    W = np.array([[weights[Pair(c, p)] for p in train_prot] for c in train_mol], dtype=np.float)
+    # print('KD.shape={}, KT.shape={}, Y.shape={}, W.shape={}'.format(KD.shape, KT.shape, Y.shape, W.shape))
+
+    # imputation
+    rows, cols = np.where(np.isnan(Y) == False)
+    Y_knowns = Y[rows, cols]
+    impvalue = np.mean(Y_knowns)
+    rows, cols = np.where(np.isnan(Y) == True)
+    Y[rows, cols] = impvalue
+
+    # Construct validation set matrix
+    val_mol = set()
+    val_prot = set()
+    labels_val = defaultdict(lambda: float())
+    weights_val = defaultdict(lambda: float())
+    for x, y, w, _ in val.itersamples():
+        dx, tx = x
+        val_mol.add(dx)
+        val_prot.add(tx)
+        labels_val[Pair(dx, tx)] = float(y)
+        weights_val[Pair(dx, tx)] = float(w)
+    KD_val = np.array([[Kd_dict[Pair(c1, c2)] for c2 in train_mol] for c1 in val_mol], dtype=np.float)
+    KT_val = np.array([[Kt_dict[Pair(p1, p2)] for p2 in train_prot] for p1 in val_prot], dtype=np.float)
+    Y_val = np.array([[labels_val[Pair(c, p)] for p in val_prot] for c in val_mol], dtype=np.float)
+    W_val = np.array([[weights_val[Pair(c, p)] for p in val_prot] for c in val_mol], dtype=np.float)
+
+    # Construct test set matrix
+    test_mol = set()
+    test_prot = set()
+    labels_test = defaultdict(lambda: float())
+    weights_test = defaultdict(lambda: float())
+    for x, y, w, _ in test.itersamples():
+        dx, tx = x
+        test_mol.add(dx)
+        test_prot.add(tx)
+        labels_test[Pair(dx, tx)] = float(y)
+        weights_test[Pair(dx, tx)] = float(w)
+    KD_test = np.array([[Kd_dict[Pair(c1, c2)] for c2 in train_mol] for c1 in test_mol], dtype=np.float)
+    KT_test = np.array([[Kt_dict[Pair(p1, p2)] for p2 in train_prot] for p1 in test_prot], dtype=np.float)
+    Y_test = np.array([[labels_test[Pair(c, p)] for p in test_prot] for c in test_mol], dtype=np.float)
+    W_test = np.array([[weights_test[Pair(c, p)] for p in test_prot] for c in test_mol], dtype=np.float)
+
+    return {'train': (KD, KT, Y, W), 'val': (KD_val, KT_val, Y_val, W_val), 'test': (KD_test, KT_test, Y_test, W_test)}

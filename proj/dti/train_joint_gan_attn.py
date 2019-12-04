@@ -36,7 +36,7 @@ from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather2D, Unsqueeze, 
 from jova.nn.models import GraphConvSequential, create_fcn_layers, NwayForward, JointAttention, \
     WeaveModel, Prot2Vec, ProteinRNN, ProteinCNN, ProteinCNN2D, GraphNeuralNet2D
 from jova.trans import undo_transforms
-from jova.utils import Trainer, io
+from jova.utils import Trainer
 from jova.utils.args import FcnArgs, WeaveGatherArgs, WeaveLayerArgs
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
@@ -48,13 +48,13 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filen
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1, 8, 64]
+# seeds = [1, 8, 64]
 # seeds = [8, 16, 32]
-# seeds = [123, 124, 125]
+seeds = [100, 7, 491]
 
 check_data = False
 
-torch.cuda.set_device(3)
+torch.cuda.set_device(2)
 
 views_reg = ViewsReg()
 
@@ -632,7 +632,7 @@ class JovaGAN(Trainer):
         # Main evaluation loop
         for epoch in range(n_epochs):
 
-            for phase in ["test"]:  # ["train", "val"]:
+            for phase in ["test"]:
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
@@ -874,8 +874,9 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         jova.utils.io.save_model(model, flags["model_dir"],
-                      "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
-                                                     score))
+                                 "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"],
+                                                                split_label, epoch,
+                                                                score))
 
 
 def default_hparams_rand(flags):

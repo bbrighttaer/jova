@@ -472,7 +472,7 @@ class SingleViewDTI(Trainer):
         # Main evaluation loop
         for epoch in range(n_epochs):
 
-            for phase in ["test"]:  # ["train", "val"]:
+            for phase in ["test"]:
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
@@ -693,7 +693,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         save_model(model, flags["model_dir"],
-                   "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], '_'.join(view), flags["model_name"], split_label,
+                   "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], '_'.join(view), flags["model_name"], split_label,
                                                   epoch, score))
 
 

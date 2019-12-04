@@ -321,10 +321,10 @@ def save_model(model, path, name):
     :return:
     """
     os.makedirs(path, exist_ok=True)
-    # file = os.path.join(path, name + ".mod")
-    # torch.save(model.state_dict(), file)
-    with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
-        f.write(name + '\n')
+    file = os.path.join(path, name + ".mod")
+    torch.save(model.state_dict(), file)
+    # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
+    #     f.write(name + '\n')
 
 
 def save_dict_model(model, path, name):
@@ -338,10 +338,10 @@ def save_dict_model(model, path, name):
     """
     os.makedirs(path, exist_ok=True)
     file = os.path.join(path, name + ".pkl")
-    # with open(file, 'wb') as f:
-    #     pickle.dump(dict(model), f)
-    with open(os.path.join(path, "dummy_save_dict.txt"), 'a') as f:
-        f.write(name + '\n')
+    with open(file, 'wb') as f:
+        pickle.dump(dict(model), f)
+    # with open(os.path.join(path, "dummy_save_dict.txt"), 'a') as f:
+    #     f.write(name + '\n')
 
 
 def load_dict_model(path, name):
@@ -368,6 +368,12 @@ def load_numpy_array(file_name):
     return np.load(file_name, allow_pickle=True)
 
 
+def save_numpy_array(array, path, name):
+    os.makedirs(path, exist_ok=True)
+    file = os.path.join(path, name)
+    np.save(file, array, allow_pickle=True)
+
+
 def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformers, gnn_fingerprint, drug_kernel_dict,
                                    prot_kernel_dict, simboost_pairwise_feats_dict):
     assert fold_num > 1
@@ -385,6 +391,11 @@ def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformer
             valid_data.move(valid_dir)
         if test_data:
             test_data.move(test_dir)
+
+        # process kernel / kronrls data
+        if drug_kernel_dict and prot_kernel_dict:
+            save_kernel_data(fold_dataset[i][3], test_data, test_dir, train_data, train_dir, valid_data, valid_dir)
+
     with open(os.path.join(save_dir, "transformers.pkl"), "wb") as f:
         pickle.dump(transformers, f)
     if gnn_fingerprint is not None:
@@ -402,8 +413,43 @@ def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformer
     return None
 
 
+def save_kernel_data(kernel_data, test_data, test_dir, train_data, train_dir, valid_data, valid_dir):
+    if train_data:
+        kd, kt, Y, W = kernel_data['KD'], kernel_data['KT'], kernel_data['Y'], kernel_data['W']
+        with open(os.path.join(train_dir, 'kd_train.pkl'), 'wb') as f:
+            pickle.dump(kd, f)
+        with open(os.path.join(train_dir, 'kt_train.pkl'), 'wb') as f:
+            pickle.dump(kt, f)
+        with open(os.path.join(train_dir, 'labels_mat_train.pkl'), 'wb') as f:
+            pickle.dump(Y, f)
+        with open(os.path.join(train_dir, 'weights_mat_train.pkl'), 'wb') as f:
+            pickle.dump(W, f)
+    if valid_data:
+        kd_val, kt_val, Y_val, W_val = kernel_data['KD_val'], kernel_data['KT_val'], \
+                                       kernel_data['Y_val'], kernel_data['W_val']
+        with open(os.path.join(valid_dir, 'kd_val.pkl'), 'wb') as f:
+            pickle.dump(kd_val, f)
+        with open(os.path.join(valid_dir, 'kt_val.pkl'), 'wb') as f:
+            pickle.dump(kt_val, f)
+        with open(os.path.join(valid_dir, 'labels_mat_val.pkl'), 'wb') as f:
+            pickle.dump(Y_val, f)
+        with open(os.path.join(valid_dir, 'weights_mat_val.pkl'), 'wb') as f:
+            pickle.dump(W_val, f)
+    if test_data:
+        kd_test, kt_test, Y_test, W_test = kernel_data['KD_test'], kernel_data['KT_test'], \
+                                           kernel_data['Y_test'], kernel_data['W_test']
+        with open(os.path.join(test_dir, 'kd_test.pkl'), 'wb') as f:
+            pickle.dump(kd_test, f)
+        with open(os.path.join(test_dir, 'kt_test.pkl'), 'wb') as f:
+            pickle.dump(kt_test, f)
+        with open(os.path.join(test_dir, 'labels_mat_test.pkl'), 'wb') as f:
+            pickle.dump(Y_test, f)
+        with open(os.path.join(test_dir, 'weights_mat_test.pkl'), 'wb') as f:
+            pickle.dump(W_test, f)
+
+
 def save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_kernel_dict,
-                         prot_kernel_dict, simboost_pairwise_feats_dict):
+                         prot_kernel_dict, simboost_pairwise_feats_dict, kernel_data):
     train_dir = os.path.join(save_dir, "train_dir")
     valid_dir = os.path.join(save_dir, "valid_dir")
     test_dir = os.path.join(save_dir, "test_dir")
@@ -413,6 +459,10 @@ def save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerp
         valid.move(valid_dir)
     if test:
         test.move(test_dir)
+
+    if kernel_data:
+        save_kernel_data(kernel_data, test, test_dir, train, train_dir, valid, valid_dir)
+
     with open(os.path.join(save_dir, "transformers.pkl"), 'wb') as f:
         pickle.dump(transformers, f)
     if gnn_fingerprint is not None:
@@ -432,10 +482,10 @@ def save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerp
 
 def load_nested_cv_dataset_from_disk(save_dir, fold_num):
     assert fold_num > 1
-    loaded = False
     train_data = []
     valid_data = []
     test_data = []
+    kernel_data = []
     for i in range(fold_num):
         fold_dir = os.path.join(save_dir, "fold" + str(i + 1))
         train_dir = os.path.join(fold_dir, "train_dir")
@@ -449,6 +499,16 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
         train_data.append(train)
         valid_data.append(valid)
         test_data.append(test)
+
+        # check for and load kernel data if present
+        kernel_files = get_kernel_filepaths(test_dir, train_dir, valid_dir)
+        for kfile in kernel_files:
+            kfile_path = kernel_files[kfile]
+            if not os.path.exists(kfile_path):
+                continue
+            with open(kfile_path, 'rb') as f:
+                kernel_files[kfile] = pickle.load(f)
+        kernel_data.append(kernel_files)
 
     gnn_fingerprint = None
     simboost_pairwise_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
@@ -471,7 +531,7 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
     loaded = True
     with open(os.path.join(save_dir, "transformers.pkl"), 'rb') as f:
         transformers = pickle.load(f)
-        return loaded, list(zip(train_data, valid_data, test_data)), transformers, gnn_fingerprint, \
+        return loaded, list(zip(train_data, valid_data, test_data, kernel_data)), transformers, gnn_fingerprint, \
                (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_pairwise_feats_dict
 
 
@@ -498,6 +558,15 @@ def load_dataset_from_disk(save_dir):
     if not os.path.exists(train_dir):
         return False, None, list(), None, None, None
 
+    # check for and load kernel data if present
+    kernel_files = get_kernel_filepaths(test_dir, train_dir, valid_dir)
+    for kfile in kernel_files:
+        kfile_path = kernel_files[kfile]
+        if not os.path.exists(kfile_path):
+            continue
+        with open(kfile_path, 'rb') as f:
+            kernel_files[kfile] = pickle.load(f)
+
     gnn_fingerprint = None
     simboost_pairwise_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
 
@@ -520,8 +589,26 @@ def load_dataset_from_disk(save_dir):
     train = jova.data.DiskDataset(train_dir)
     valid = jova.data.DiskDataset(valid_dir) if os.path.exists(valid_dir) else None
     test = jova.data.DiskDataset(test_dir) if os.path.exists(test_dir) else None
-    all_dataset = (train, valid, test)
+    all_dataset = (train, valid, test, kernel_files)
     with open(os.path.join(save_dir, "transformers.pkl"), 'rb') as f:
         transformers = pickle.load(f)
         return loaded, all_dataset, transformers, gnn_fingerprint, \
                (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_pairwise_feats_dict
+
+
+def get_kernel_filepaths(test_dir, train_dir, valid_dir):
+    return {'KD': os.path.join(train_dir, 'kd_train.pkl'),
+            'KT': os.path.join(train_dir, 'kt_train.pkl'),
+            'Y': os.path.join(train_dir, 'labels_mat_train.pkl'),
+            'W': os.path.join(train_dir, 'weights_mat_train.pkl'),
+
+            'KD_val': os.path.join(valid_dir, 'kd_val.pkl'),
+            'KT_val': os.path.join(valid_dir, 'kt_val.pkl'),
+            'Y_val': os.path.join(valid_dir, 'labels_mat_val.pkl'),
+            'W_val': os.path.join(valid_dir, 'weights_mat_val.pkl'),
+
+            'KD_test': os.path.join(test_dir, 'kd_test.pkl'),
+            'KT_test': os.path.join(test_dir, 'kt_test.pkl'),
+            'Y_test': os.path.join(test_dir, 'labels_mat_test.pkl'),
+            'W_test': os.path.join(test_dir, 'weights_mat_test.pkl')
+            }

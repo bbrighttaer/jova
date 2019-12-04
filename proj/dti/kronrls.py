@@ -10,30 +10,30 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import argparse
+import os
 import random
 import time
-from collections import defaultdict
 from datetime import datetime as dt
 
 import numpy as np
 import torch
+from sklearn.metrics import mean_squared_error
 from soek import *
-from torch.nn.functional import mse_loss
 
 import jova.metrics as mt
 import jova.utils.io
 from jova.data import get_data, load_proteins
 from jova.data.data import Pair
 from jova.metrics import compute_model_performance
-from jova.utils import Trainer, io
-from jova.utils.io import save_dict_model
-from jova.utils.thread import UnboundedProgressbar
+from jova.trans import undo_transforms
+from jova.utils import Trainer
+from jova.utils.io import save_numpy_array, load_numpy_array
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
-seeds = [1, 8, 64]
+seeds = [1]  # , 8, 64]
 
 
 class KronRLS(Trainer):
@@ -56,12 +56,13 @@ class KronRLS(Trainer):
             test_dataset = None
             if flags['test']:
                 test_dataset = (data[1][2].X, data[1][2].y, data[1][2].w)
-            data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset}
+            data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset, "kernel_data": data[1][3]}
         else:
             train_dataset = (data[1][fold][0].X, data[1][fold][0].y, data[1][fold][0].w)
             valid_dataset = (data[1][fold][1].X, data[1][fold][1].y, data[1][fold][1].w)
             test_dataset = (data[1][fold][2].X, data[1][fold][2].y, data[1][fold][2].w)
-            data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset}
+            kernel_data = data[1][fold][3]
+            data = {"train": train_dataset, "val": valid_dataset, "test": test_dataset, "kernel_data": kernel_data}
         return data
 
     @staticmethod
@@ -83,64 +84,48 @@ class KronRLS(Trainer):
         if sim_data_node:
             sim_data_node.data = [metrics_node]
 
-        # Construct Kd and Kt
-        train_mol = set()
-        train_prot = set()
-        labels = defaultdict(lambda: float())
-        weights = defaultdict(lambda: float())
-        for x, y, w in zip(*data['train']):
-            mol, prot = x
-            train_mol.add(mol)
-            train_prot.add(prot)
-            labels[Pair(mol, prot)] = float(y)
-            weights[Pair(mol, prot)] = float(w)
-        Kd = np.array([[drug_kernel_dict[Pair(c1, c2)] for c2 in train_mol] for c1 in train_mol], dtype=np.float)
-        Kt = np.array([[prot_kernel_dict[Pair(p1, p2)] for p2 in train_prot] for p1 in train_prot], dtype=np.float)
-        Y = np.array([[labels[Pair(c, p)] for p in train_prot] for c in train_mol], dtype=np.float)
-        W = np.array([[weights[Pair(c, p)] for p in train_prot] for c in train_mol], dtype=np.float)
-        assert (Y.shape == W.shape)
-        Y = Y * W
-        print('Kd.shape={}, Kt.shape={}, Y.shape={}, W.shape={}'.format(Kd.shape, Kt.shape, Y.shape, W.shape))
-
-        # I'm impatient so I wanna see something :)
-        pgbar = UnboundedProgressbar()
-        pgbar.start()
+        kernel_data = data['kernel_data']
+        KD = kernel_data['KD']
+        KT = kernel_data['KT']
+        Y = kernel_data['Y']
+        W = kernel_data['W']
 
         # Eigen decompositions
-        Lambda, V = np.linalg.eigh(Kd)
-        Sigma, U = np.linalg.eigh(Kt)
+        Lambda, V = np.linalg.eigh(KD)
+        Lambda = Lambda.reshape((-1, 1))
+        Sigma, U = np.linalg.eigh(KT)
+        Sigma = Sigma.reshape((-1, 1))
 
         # Compute C
-        C = np.kron(np.diag(Lambda), np.diag(Sigma)) + reg_lambda * np.identity(Kd.shape[0] * Kt.shape[0])
-        C = np.linalg.inv(C) @ np.ravel(U.T @ Y.T @ V)
-        C = C.reshape(U.shape[0], V.shape[0])
+        newevals = 1. / (Lambda @ Sigma.T + reg_lambda)
+        # newevals = newevals.T
+        VTYU = V.T @ Y @ U
+        C = np.multiply(VTYU, newevals)
 
         # compute weights
-        A = U @ C @ V.T
-        A = A.reshape(-1, 1)
+        A = V @ C @ U.T
 
-        # assign weights
-        entities_mat = np.array([[Pair(c, p) for p in train_prot] for c in train_mol], dtype=np.object).ravel()
-        A_dict = {pair: a for pair, a in zip(entities_mat, A)}
+        # training loss
+        P_train = KD @ A @ KT.T
+        tr_loss = mean_squared_error(Y.reshape(-1, 1), P_train.reshape(-1, 1), W.reshape(-1, 1))
 
-        # Test / Validation
-        eval_data = data['val']  # if is_hsearch else 'test']
-        eval_mat = []
-        y = eval_data[1]
-        w = eval_data[2]
-        for x_i in eval_data[0]:
-            mol, prot = x_i
-            row = [drug_kernel_dict[Pair(mol, pair.p1)] * prot_kernel_dict[Pair(prot, pair.p2)] for pair in A_dict]
-            eval_mat.append(row)
-        eval_mat = np.array(eval_mat, dtype=np.float)
-        y_hat = eval_mat @ A
-        assert (len(y_hat.shape) == len(w.shape))
-        y_hat = y_hat * w
-        loss = mse_loss(input=to_tensor(y_hat), target=to_tensor(y))
-
-        # Alright, time to move on
-        pgbar.stop()
-        pgbar.join()
+        # Evaluation
+        print('Eval mat construction started')
+        if is_hsearch:
+            KD_eval = kernel_data['KD_val']
+            KT_eval = kernel_data['KT_val']
+            Y_eval = kernel_data['Y_val']
+            W_eval = kernel_data['W_eval']
+        else:
+            KD_eval = kernel_data['KD_test']
+            KT_eval = kernel_data['KT_test']
+            Y_eval = kernel_data['Y_test']
+            W_eval = kernel_data['W_test']
+        P_val = KD_eval @ A @ KT_eval.T
+        y_hat = P_val.reshape(-1, 1)
+        y = Y_eval.reshape(-1, 1)
+        w = W_eval.reshape(-1, 1)
+        eval_loss = mean_squared_error(y, y_hat, w)
 
         # Metrics
         eval_dict = {}
@@ -150,15 +135,72 @@ class KronRLS(Trainer):
                 metrics_dict[m].append(eval_dict[m])
             else:
                 metrics_dict[m] = [eval_dict[m]]
-        print('Evaluation loss={}, score={}, metrics={}'.format(loss.item(), score, str(eval_dict)))
+        print(f'Training loss={tr_loss}, evaluation loss={eval_loss}, score={score}, metrics={str(eval_dict)}')
 
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
-        return {'model': A_dict, 'score': score, 'epoch': 0}
+        return {'model': A, 'score': score, 'epoch': 0}
 
     @staticmethod
-    def evaluate_model():
-        pass
+    def evaluate_model(data, model_dir, model_file, metrics, transformer, drug_kernel_dict, prot_kernel_dict, tasks,
+                       sim_data_node):
+        print("Model evaluation...")
+        start = time.time()
+        metrics_dict = {}
+        metrics_node = DataNode(label="validation_metrics", data=metrics_dict)
+        scores_lst = []
+        scores_node = DataNode(label="validation_score", data=scores_lst)
+        predicted_vals = []
+        true_vals = []
+        model_preds_node = DataNode(label="model_predictions", data={"y": true_vals, "y_pred": predicted_vals})
+        if sim_data_node:
+            sim_data_node.data = [metrics_node, scores_node, model_preds_node]
+
+        kernel_data = data['kernel_data']
+
+        # compute weights
+        A = load_numpy_array(os.path.join(model_dir, model_file))
+
+        # Test
+        KD_eval = kernel_data['KD_test']
+        KT_eval = kernel_data['KT_test']
+        Y_eval = kernel_data['Y_test']
+        W_eval = kernel_data['W_test']
+
+        P_val = KD_eval @ A @ KT_eval.T
+        y_hat = P_val.reshape(-1, 1)
+        y = Y_eval.reshape(-1, 1)
+        w = W_eval.reshape(-1, 1)
+        eval_loss = mean_squared_error(y, y_hat, w)
+
+        # Metrics
+        eval_dict = {}
+        score = KronRLS.evaluate(eval_dict, y, y_hat, w, metrics, tasks, transformer)
+        for m in eval_dict:
+            if m in metrics_dict:
+                metrics_dict[m].append(eval_dict[m])
+            else:
+                metrics_dict[m] = [eval_dict[m]]
+        # apply transformers
+
+        y_hat = y_hat[w.nonzero()[0]]
+        y = y[w.nonzero()[0]]
+        predicted_vals.extend(undo_transforms(y_hat, transformer).squeeze().tolist())
+        true_vals.extend(undo_transforms(y, transformer).squeeze().tolist())
+        scores_lst.append(score)
+        print(f'eval loss={eval_loss}, score={score}, metrics={str(eval_dict)}')
+
+        duration = time.time() - start
+        print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
+
+
+def compute_eval_mat(data, q, idx, Kd_dict, Kt_dict, A_dict):
+    rows = []
+    for x_i in data:
+        mol, prot = x_i
+        row = [Kd_dict[Pair(mol, pair.p1)] * Kt_dict[Pair(prot, pair.p2)] for pair in A_dict]
+        rows.append(row)
+    q.append((idx, rows))
 
 
 def to_numpy(tensor):
@@ -184,8 +226,8 @@ def main(flags):
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         dataset_lbl = flags["dataset_name"]
-        node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
-                                                "eval" if flags["eval"] else "train", date_label)
+        node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label,
+                                             "eval" if flags["eval"] else "train", date_label)
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list
@@ -240,7 +282,7 @@ def main(flags):
                                     "tasks": tasks,
                                     "is_hsearch": True}
 
-                hparams_conf = get_hparam_config(flags, cview, pview)
+                hparams_conf = get_hparam_config(flags)
 
                 if hparam_search is None:
                     search_alg = {"random_search": RandomSearchCV,
@@ -252,7 +294,7 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               save_model_fn=jova.utils.io.save_dict_model,
+                                               save_model_fn=jova.utils.io.save_numpy_array,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,
@@ -268,7 +310,7 @@ def main(flags):
                 print(stats)
                 print("Best params = {}".format(stats.best(m="max")))
             else:
-                invoke_train(trainer, tasks, data, transformer, flags, data_node, (cview, pview), drug_kernel_dict,
+                invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label, drug_kernel_dict,
                              prot_kernel_dict)
 
         # save simulation data resource tree to file.
@@ -276,7 +318,7 @@ def main(flags):
 
 
 def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, drug_kernel_dict, prot_kernel_dict):
-    hyper_params = default_hparams_bopt(flags, *view)
+    hyper_params = default_hparams_bopt(flags)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
         folds_data = []
@@ -292,7 +334,7 @@ def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, drug
                    prot_kernel_dict)
 
 
-def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, tranformer, view, drug_kernel_dict,
+def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transformer, view, drug_kernel_dict,
                prot_kernel_dict, k=None):
     data = trainer.data_provider(k, flags, data)
     _data, reg_lambda, metrics = trainer.initialize(hparams=hyper_params,
@@ -300,42 +342,36 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, tranfor
                                                     val_dataset=data["val"],
                                                     test_dataset=data["test"])
     if flags["eval"]:
-        pass
+        trainer.evaluate_model(data, flags.model_dir, flags.eval_model_name, metrics, transformer,
+                               drug_kernel_dict, prot_kernel_dict, tasks, sim_data_node)
     else:
         # Train the model
-        results = trainer.train(data, reg_lambda, metrics, tranformer, drug_kernel_dict, prot_kernel_dict,
+        results = trainer.train(data, reg_lambda, metrics, transformer, drug_kernel_dict, prot_kernel_dict,
                                 tasks=tasks, sim_data_node=sim_data_node)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        save_dict_model(model, flags["model_dir"],
-                        "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], '_'.join(view), flags["model_name"],
-                                                       split_label,
-                                                       epoch, score))
+        save_numpy_array(model, flags["model_dir"],
+                         "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
+                                                        split_label, epoch, score))
 
 
-def default_hparams_rand(flags, comp_view, prot_view):
+def default_hparams_rand(flags):
     return {
-        "reg_lambda": 0.1,
-        "comp_view": comp_view,
-        "prot_view": prot_view
+        "reg_lambda": 1.0
     }
 
 
-def default_hparams_bopt(flags, comp_view, prot_view):
+def default_hparams_bopt(flags):
     return {
-        "reg_lambda": 0.1,
-        "comp_view": comp_view,
-        "prot_view": prot_view
+        "reg_lambda": 1.0
     }
 
 
-def get_hparam_config(flags, comp_view, prot_view):
+def get_hparam_config(flags):
     return {
-        "reg_lambda": RealParam(min=0.1),
-        "comp_view": ConstantParam(comp_view),
-        "prot_view": ConstantParam(prot_view)
+        "reg_lambda": LogRealParam()
     }
 
 

@@ -33,7 +33,7 @@ from jova.utils.math import ExpAverage
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
-
+torch.cuda.set_device(3)
 # seeds = [123, 124, 125]
 seeds = [1, 8, 64]
 
@@ -290,7 +290,7 @@ def main(flags):
                 invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label)
 
         # save simulation data resource tree to file.
-        # sim_data.to_json(path="./analysis/")
+        sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data, transformer, flags, data_node, view):
@@ -325,7 +325,7 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transfo
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         save_mf_model_and_feats(model, flags["model_dir"],
-                                "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"],
+                                "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
                                                                split_label, epoch, score))
 
 

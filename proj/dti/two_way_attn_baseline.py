@@ -33,7 +33,7 @@ from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather2D, PreSiameseL
     SiameseBatchNorm, SiameseNonlinearity, SiameseDropout, PairwiseDotProduct
 from jova.nn.models import GraphConvSequential, WeaveModel, ProteinRNN, TwoWayForward, TwoWayAttention, Prot2Vec
 from jova.trans import undo_transforms
-from jova.utils import Trainer, io
+from jova.utils import Trainer
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage
@@ -454,7 +454,7 @@ class TwoWayAttnBaseline(Trainer):
         # Main evaluation loop
         for epoch in range(n_epochs):
 
-            for phase in ["test"]:  # ["train", "val"]:
+            for phase in ["test"]:
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
@@ -679,8 +679,8 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         jova.utils.io.save_model(model, flags["model_dir"],
-                      "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"], split_label, epoch,
-                                                     score))
+                                 "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
+                                                                split_label, epoch, score))
 
 
 def default_hparams_rand(flags):

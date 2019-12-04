@@ -121,26 +121,65 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
         'butina': jova.splits.ButinaSplitter(),
     }
     splitter = splitters[split]
+    from jova.data.data import compute_train_val_test_kronrls_mats
     if test:
+        kernel_data = None
         train, valid, test = splitter.train_valid_test_split(dataset, seed=seed)
-        all_dataset = (train, valid, test)
+
+        # process kernel / kronrls data
+        if drug_sim_kernel_dict and prot_sim_kernel_dict:
+            print('Constructing kernel data')
+            kernel_data = compute_train_val_test_kronrls_mats(train, valid, test, drug_sim_kernel_dict,
+                                                              prot_sim_kernel_dict)
+            kernel_data = _wrap_kernel_data(kernel_data)
+        all_dataset = (train, valid, test, kernel_data)
         if reload:
-            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint,
-                                 drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict)
+            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_sim_kernel_dict,
+                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data)
     elif cross_validation:
         fold_datasets = splitter.k_fold_split(dataset, K, seed=seed)
+        fold_datasets = list(fold_datasets)
+
+        # process kernel / kronrls data if simulation is in kernel mode
+        if drug_sim_kernel_dict and prot_sim_kernel_dict:
+            print('Constructing kernel data')
+            fold_ds = []
+            for fold in fold_datasets:
+                kernel_data = compute_train_val_test_kronrls_mats(fold[0], fold[1], fold[2], drug_sim_kernel_dict,
+                                                                  prot_sim_kernel_dict)
+                kernel_data = _wrap_kernel_data(kernel_data)
+                fold_ds.append(list(fold) + [kernel_data])
+            fold_datasets = fold_ds
         all_dataset = fold_datasets
         if reload:
             save_nested_cv_dataset_to_disk(save_dir, all_dataset, K, transformers, gnn_fingerprint,
                                            drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict)
     else:
+        kernel_data = None
         # not cross validating, and not testing.
         train, valid, test = splitter.train_valid_test_split(dataset, frac_train=0.9, frac_valid=0.1,
                                                              frac_test=0, seed=seed)
-        all_dataset = (train, valid, test)
+        # process kernel / kronrls data
+        if drug_sim_kernel_dict and prot_sim_kernel_dict:
+            print('Constructing kernel data')
+            kernel_data = compute_train_val_test_kronrls_mats(train, valid, test, drug_sim_kernel_dict,
+                                                              prot_sim_kernel_dict)
+            kernel_data = _wrap_kernel_data(kernel_data)
+        all_dataset = (train, valid, test, kernel_data)
         if reload:
-            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint,
-                                 drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict)
+            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_sim_kernel_dict,
+                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data)
 
     return tasks, all_dataset, transformers, gnn_fingerprint, \
            (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_drug_target_feats_dict
+
+
+def _wrap_kernel_data(kernel_data):
+    assert isinstance(kernel_data, dict)
+    kd, kt, Y, W = kernel_data['train']
+    kd_val, kt_val, Y_val, W_val = kernel_data['val']
+    kd_test, kt_test, Y_test, W_test = kernel_data['test']
+    kdata = {'KD': kd, 'KT': kt, 'Y': Y, 'W': W,
+             'KD_val': kd_val, 'KT_val': kt_val, 'Y_val': Y_val, 'W_val': W_val,
+             'KD_test': kd_test, 'KT_test': kt_test, 'Y_test': Y_test, 'W_test': W_test}
+    return kdata
