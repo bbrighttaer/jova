@@ -21,7 +21,6 @@ from sklearn.metrics import mean_squared_error
 from soek import *
 
 import jova.metrics as mt
-import jova.utils.io
 from jova.data import get_data, load_proteins
 from jova.data.data import Pair
 from jova.metrics import compute_model_performance
@@ -33,14 +32,14 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
-seeds = [1]  # , 8, 64]
+seeds = [1, 8, 64]
 
 
 class KronRLS(Trainer):
 
     @staticmethod
-    def initialize(hparams, train_dataset, val_dataset, test_dataset):
-        data = {"train": train_dataset, "val": val_dataset, "test": test_dataset}
+    def initialize(hparams, train_dataset, val_dataset, test_dataset, kernel_data):
+        data = {"train": train_dataset, "val": val_dataset, "test": test_dataset, "kernel_data": kernel_data}
         # metrics
         metrics = [mt.Metric(mt.rms_score, np.nanmean),
                    mt.Metric(mt.concordance_index, np.nanmean),
@@ -115,7 +114,7 @@ class KronRLS(Trainer):
             KD_eval = kernel_data['KD_val']
             KT_eval = kernel_data['KT_val']
             Y_eval = kernel_data['Y_val']
-            W_eval = kernel_data['W_eval']
+            W_eval = kernel_data['W_val']
         else:
             KD_eval = kernel_data['KD_test']
             KT_eval = kernel_data['KT_test']
@@ -294,7 +293,7 @@ def main(flags):
                                                initializer=trainer.initialize,
                                                data_provider=trainer.data_provider,
                                                train_fn=trainer.train,
-                                               save_model_fn=jova.utils.io.save_numpy_array,
+                                               save_model_fn=save_dummy,
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,
@@ -306,9 +305,9 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt, n_iters))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=50, seed=seed)
                 print(stats)
-                print("Best params = {}".format(stats.best(m="max")))
+                print("Best params = {}".format(stats.best()))
             else:
                 invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label, drug_kernel_dict,
                              prot_kernel_dict)
@@ -373,6 +372,13 @@ def get_hparam_config(flags):
     return {
         "reg_lambda": LogRealParam()
     }
+
+
+def save_dummy(array, path, name):
+    os.makedirs(path, exist_ok=True)
+    file = os.path.join(path, name)
+    with open(os.path.join(path, "dummy_save_kronrls.txt"), 'a') as f:
+        f.write(name + '\n')
 
 
 class Flags(object):

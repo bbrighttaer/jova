@@ -115,3 +115,12 @@ class GraphConvArgs(Args):
         self.graph_pool = pool
         self.dense_layer_size = dense_layer_size
         self._args = (in_dim, out_dim, min_deg, max_deg, self.activation_function)
+
+
+class Flags(object):
+    # enables using either object referencing or dict indexing to retrieve user passed arguments of flag objects.
+    def __getitem__(self, item):
+        return self.__dict__[item]
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)

@@ -36,7 +36,7 @@ from jova.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAt
     GraphNeuralNet2D, ProteinCNN2D, ProteinCNN
 from jova.trans import undo_transforms
 from jova.utils import Trainer
-from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs, Flags
 from jova.utils.attn_helpers import MultimodalAttentionData
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
@@ -1142,15 +1142,6 @@ def verify_multiview_data(data_dict, cv_data=True):
         print('#' * 100)
         corr.append(ecfp8 == weave == gconv == gnn)
     print(corr)
-
-
-class Flags(object):
-    # enables using either object referencing or dict indexing to retrieve user passed arguments of flag objects.
-    def __getitem__(self, item):
-        return self.__dict__[item]
-
-    def __setitem__(self, key, value):
-        setattr(self, key, value)
 
 
 if __name__ == '__main__':

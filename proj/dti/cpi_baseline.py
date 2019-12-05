@@ -592,7 +592,7 @@ def main(flags):
                 stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20,
                                           seed=seed, verbose=True)
                 print(stats)
-                print("Best params = {}".format(stats.best(m="max")))
+                print("Best params = {}".format(stats.best()))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node,
                              view, prot_profile)

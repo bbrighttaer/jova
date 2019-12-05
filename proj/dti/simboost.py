@@ -298,7 +298,7 @@ def main(flags):
 
                 stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
                 print(stats)
-                print("Best params = {}".format(stats.best(m="max")))
+                print("Best params = {}".format(stats.best()))
             else:
                 invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label, simboost_feats_dict, seed)
 
