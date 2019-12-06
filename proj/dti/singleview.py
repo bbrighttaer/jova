@@ -11,6 +11,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import os
 import random
 import time
 from datetime import datetime as dt
@@ -39,7 +40,7 @@ from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs, Flags
 from jova.utils.io import save_model, load_model, load_pickle
 from jova.utils.math import ExpAverage, Count
 from jova.utils.tb import TBMeanTracker
-from jova.utils.train_helpers import count_parameters
+from jova.utils.train_helpers import count_parameters, parse_hparams
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -526,7 +527,7 @@ class SingleViewDTI(Trainer):
         print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
 
 
-def main(i, flags):
+def main(id, flags):
     if len(flags["views"]) > 0:
         print("Single views for training: {}, num={}".format(flags["views"], len(flags["views"])))
     else:
@@ -657,7 +658,17 @@ def main(i, flags):
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
                  prot_profile, summary_writer_creator):
-    hyper_params = default_hparams_bopt(flags, *view)
+    try:
+        hfile = os.path.join('soek_res', get_hparam_file(*view))
+        exists = os.path.exists(hfile)
+        status = 'Found' if exists else 'Not Found, switching to default hyperparameters'
+        print(f'Hyperparameters file:{hfile}, status={status}')
+        if not exists:
+            raise FileNotFoundError(f'{hfile} not found')
+        hyper_params = parse_hparams(hfile)
+    except:
+        hyper_params = default_hparams_bopt(flags, *view)
+
     # Initialize the model and other related entities for training.
     if flags["cv"]:
         folds_data = []
@@ -735,23 +746,23 @@ def default_hparams_rand(flags, view):
 def default_hparams_bopt(flags, comp_view, prot_view):
     return {
         "comp_view": comp_view,
-        "hdims": [5000, 5000, 256, 256],
+        "hdims": [765, 2675],
         "output_dim": len(flags["tasks"]),
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout regs
-        "dprob": 0.01,
+        "dprob": 0.02907481292488022,
 
         "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
-        "optimizer": "rmsprop",
-        "optimizer__global__weight_decay": 0.0001,
-        "optimizer__global__lr": 0.0001,
+        "optimizer": "adam",
+        "optimizer__global__weight_decay": 0.0008599834489091449,
+        "optimizer__global__lr": 0.00023239445781642333,
         "optimizer__adadelta__rho": 0.115873,
 
         "prot": {
@@ -763,7 +774,7 @@ def default_hparams_bopt(flags, comp_view, prot_view):
         },
 
         "weave": {
-            "dim": 50,
+            "dim": 251,
             "update_pairs": False,
         },
         "gconv": {
@@ -857,6 +868,21 @@ def get_hparam_config(flags, comp_view, prot_view):
     }
 
 
+def get_hparam_file(cview, pview):
+    return {'ecfp8-psc': 'bayopt_search_single_view_ecfp8_psc_dti_2019_11_19__01_22_15_gp_3000.csv',
+            'weave-psc': 'bayopt_search_single_view_weave_psc_dti_2019_11_19__15_49_07_gp_3000.csv',
+            'gconv-psc': 'bayopt_search_single_view_gconv_psc_dti_2019_11_20__23_23_12_gp_3000.csv',
+            'gnn-psc': 'bayopt_search_single_view_gnn_psc_dti_2019_11_21__21_46_59_gp_3000.csv',
+            'ecfp8-pcnna': 'bayopt_search_single_view_ecfp8_pcnna_dti_2019_11_23__20_23_56_gp_3000.csv',
+            'weave-pcnna': 'bayopt_search_single_view_weave_pcnna_dti_2019_11_23__20_23_56_gp_3000.csv',
+            'gconv-pcnna': 'bayopt_search_single_view_gconv_pcnna_dti_2019_11_23__20_23_56_gp_3000.csv',
+            'ecfp8-rnn': 'bayopt_search_single_view_ecfp8_rnn_dti_2019_11_23__20_23_56_gp_3000.csv',
+            'weave-rnn': 'bayopt_search_single_view_weave_rnn_dti_2019_11_23__20_23_56_gp_3000.csv',
+            'gconv-rnn': 'bayopt_search_single_view_gconv_rnn_dti_2019_11_23__20_23_56_gp_3000.csv',
+            'gnn-rnn': 'bayopt_search_single_view_gnn_rnn_dti_2019_11_23__20_23_56_gp_3000.csv',
+            }.get(f'{cview.lower()}-{pview.lower()}', None)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="DTI with jova model training.")
 
@@ -890,7 +916,7 @@ if __name__ == '__main__':
                         help='Threshold such that entities with observations no more than it would be filtered out.'
                         )
     parser.add_argument('--split',
-                        help='Splitting scheme to use. Options are: [warm, cold_drug, cold_target, cold]',
+                        help='Splitting scheme to use. Options are: [warm, cold_drug, cold_target, cold_drug_target]',
                         action='append',
                         type=str,
                         dest='split_schemes'
@@ -944,7 +970,7 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--mp", action='store_true', help="Multiprocessing option")
+    parser.add_argument('--mp', '-mp', action='store_true', help="Multiprocessing option")
 
     args = parser.parse_args()
     procs = []
@@ -957,7 +983,7 @@ if __name__ == '__main__':
         setattr(flags, "cv", True if flags.fold_num > 2 else False)
         setattr(flags, "views", [(cv, pv) for cv, pv in zip(args.comp_view, args.prot_view)])
         flags['split'] = split
-        flags['predict_cold'] = split == 'cold'
+        flags['predict_cold'] = split == 'cold_drug_target'
         flags['cold_drug'] = split == 'cold_drug'
         flags['cold_target'] = split == 'cold_target'
         flags['cold_drug_cluster'] = split == 'cold_drug_cluster'

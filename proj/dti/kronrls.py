@@ -10,6 +10,7 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import argparse
+import multiprocessing as mp
 import os
 import random
 import time
@@ -339,7 +340,8 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transfo
     _data, reg_lambda, metrics = trainer.initialize(hparams=hyper_params,
                                                     train_dataset=data["train"],
                                                     val_dataset=data["val"],
-                                                    test_dataset=data["test"])
+                                                    test_dataset=data["test"],
+                                                    kernel_data=data['kernel_data'])
     if flags["eval"]:
         trainer.evaluate_model(data, flags.model_dir, flags.eval_model_name, metrics, transformer,
                                drug_kernel_dict, prot_kernel_dict, tasks, sim_data_node)
@@ -349,11 +351,9 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transfo
                                 tasks=tasks, sim_data_node=sim_data_node)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
         save_numpy_array(model, flags["model_dir"],
                          "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
-                                                        split_label, epoch, score))
+                                                        flags.split, epoch, score))
 
 
 def default_hparams_rand(flags):
@@ -422,29 +422,11 @@ if __name__ == '__main__':
                         default=6,
                         help='Threshold such that entities with observations no more than it would be filtered out.'
                         )
-    parser.add_argument('--cold_drug',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_target',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" targets in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_drug_cluster',
-                        default=False,
-                        help='Flag of whether the split will leave "cold cluster" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--predict_cold',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" entities in the test data.',
-                        action='store_true')
-    parser.add_argument('--split_warm',
-                        default=False,
-                        help='Flag of whether the split will not leave "cold" entities in the test data.',
-                        action='store_true'
+    parser.add_argument('--split',
+                        help='Splitting scheme to use. Options are: [warm, cold_drug, cold_target, cold_drug_target]',
+                        action='append',
+                        type=str,
+                        dest='split_schemes'
                         )
     parser.add_argument('--model_dir',
                         type=str,
@@ -465,10 +447,6 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    # parser.add_argument('--data_dir',
-    #                     type=str,
-    #                     default='../../data/',
-    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -491,14 +469,29 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument('--mp', '-mp', action='store_true', help="Multiprocessing option")
 
     args = parser.parse_args()
-
-    args = parser.parse_args()
-    flags = Flags()
-    args_dict = args.__dict__
-    for arg in args_dict:
-        setattr(flags, arg, args_dict[arg])
-    setattr(flags, "cv", True if flags.fold_num > 2 else False)
-    setattr(flags, "views", [(cv, pv) for cv, pv in zip(args.comp_view, args.prot_view)])
-    main(flags)
+    procs = []
+    use_mp = args.mp
+    for split in args.split_schemes:
+        flags = Flags()
+        args_dict = args.__dict__
+        for arg in args_dict:
+            setattr(flags, arg, args_dict[arg])
+        setattr(flags, "cv", True if flags.fold_num > 2 else False)
+        setattr(flags, "views", [(cv, pv) for cv, pv in zip(args.comp_view, args.prot_view)])
+        flags['split'] = split
+        flags['predict_cold'] = split == 'cold_drug_target'
+        flags['cold_drug'] = split == 'cold_drug'
+        flags['cold_target'] = split == 'cold_target'
+        flags['cold_drug_cluster'] = split == 'cold_drug_cluster'
+        flags['split_warm'] = split == 'warm'
+        if use_mp:
+            p = mp.Process(target=main, args=(flags,))
+            procs.append(p)
+            p.start()
+        else:
+            main(flags)
+    for proc in procs:
+        proc.join()

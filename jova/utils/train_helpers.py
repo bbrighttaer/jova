@@ -15,10 +15,11 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
-import torch.nn.functional as F
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.nn.functional as F
 from keras.utils.data_utils import get_file
 from sklearn import svm as svm
 from sklearn.metrics import accuracy_score
@@ -356,3 +357,22 @@ class ViewsReg(object):
             assert (v in all), "{} not in {}".format(v, str(all))
 
 
+def parse_hparams(file):
+    hdata = pd.read_csv(file, header=0, nrows=1)
+    hdict = hdata.to_dict('index')
+    hdict = hdict[list(hdict.keys())[0]]
+    return _rec_parse_hparams(hdict)
+
+
+def _rec_parse_hparams(p_dict):
+    hparams = {}
+    for k in p_dict:
+        v = p_dict[k]
+        try:
+            new_v = eval(v) if isinstance(v, str) else v
+            if isinstance(new_v, dict):
+                new_v = _rec_parse_hparams(new_v)
+            hparams[k] = new_v
+        except NameError:
+            hparams[k] = v
+    return hparams

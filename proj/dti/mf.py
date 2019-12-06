@@ -20,10 +20,10 @@ from datetime import datetime as dt
 
 import numpy as np
 import torch
+from jova import cuda
 from soek import *
 
 import jova.metrics as mt
-from jova import cuda
 from jova.data import get_data, load_proteins
 from jova.data.data import Pair
 from jova.metrics import compute_model_performance
@@ -33,7 +33,7 @@ from jova.utils.math import ExpAverage
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
-torch.cuda.set_device(3)
+torch.cuda.set_device(0)
 # seeds = [123, 124, 125]
 seeds = [1, 8, 64]
 
@@ -125,6 +125,8 @@ class MF(Trainer):
         for i, c in enumerate(comps):
             for j, p in enumerate(prots):
                 M[i, j] = float(labels_dict[Pair(c, p)])
+        if cuda:
+            M = M.cuda()
 
         losses = []
         print('{:<6}\t| {:>10}\t|'.format('Epoch', 'Loss (MSE)'))
@@ -197,14 +199,14 @@ def main(flags):
         print("No views selected for training")
 
     for view in flags["views"]:
+        dataset_lbl = flags["dataset_name"]
         cview, pview = view
-        sim_label = "MF_{}_{}".format(cview, pview)
+        sim_label = "MF_{}_{}_{}".format(dataset_lbl, cview, pview)
         print(sim_label)
 
         # Simulation data resource tree
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
-        dataset_lbl = flags["dataset_name"]
         node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
                                                 "eval" if flags["eval"] else "train", date_label)
         sim_data = DataNode(label=node_label)
@@ -384,30 +386,6 @@ if __name__ == '__main__':
                         default=6,
                         help='Threshold such that entities with observations no more than it would be filtered out.'
                         )
-    parser.add_argument('--cold_drug',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_target',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" targets in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_drug_cluster',
-                        default=False,
-                        help='Flag of whether the split will leave "cold cluster" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--predict_cold',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" entities in the test data.',
-                        action='store_true')
-    parser.add_argument('--split_warm',
-                        default=False,
-                        help='Flag of whether the split will not leave "cold" entities in the test data.',
-                        action='store_true'
-                        )
     parser.add_argument('--model_dir',
                         type=str,
                         default='./model_dir',
@@ -462,4 +440,11 @@ if __name__ == '__main__':
     for arg in args_dict:
         setattr(flags, arg, args_dict[arg])
     setattr(flags, "views", [(cv, pv) for cv, pv in zip(args.comp_view, args.prot_view)])
+    split = 'warm'
+    flags['split'] = split
+    flags['predict_cold'] = split == 'cold_drug_target'
+    flags['cold_drug'] = split == 'cold_drug'
+    flags['cold_target'] = split == 'cold_target'
+    flags['cold_drug_cluster'] = split == 'cold_drug_cluster'
+    flags['split_warm'] = split == 'warm'
     main(flags)
