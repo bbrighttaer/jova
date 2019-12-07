@@ -42,15 +42,7 @@ class MF(Trainer):
 
     @staticmethod
     def initialize(hparams, train_dataset, val_dataset, test_dataset):
-        all_comps = set()
-        all_prots = set()
-        pair_to_value_y = {}
-        for x, y, w, id in train_dataset.itersamples():
-            mol, prot = x
-            all_comps.add(mol)
-            all_prots.add(prot)
-            pair_to_value_y[Pair(mol, prot)] = y
-
+        M, all_comps, all_prots = train_dataset['labels'], train_dataset['compounds'], train_dataset['proteins']
         model = MatrixFactorization(len(all_comps), len(all_prots), k=hparams['latent_dim'])
         if cuda:
             model = model.cuda()
@@ -82,12 +74,12 @@ class MF(Trainer):
         metrics = [mt.Metric(mt.rms_score, np.nanmean),
                    mt.Metric(mt.concordance_index, np.nanmean),
                    mt.Metric(mt.pearson_r2_score, np.nanmean)]
-        return model, optimizer, all_comps, all_prots, pair_to_value_y, metrics
+        return model, optimizer, all_comps, all_prots, M, metrics
 
     @staticmethod
     def data_provider(fold, flags, data):
         # Assumes no CV
-        return {"train": data[1][0], "val": None, "test": None}
+        return {"train": data[6], "val": None, "test": None}
 
     @staticmethod
     def evaluate(eval_dict, y, y_pred, w, metrics, tasks, transformers):
@@ -100,7 +92,7 @@ class MF(Trainer):
         return score
 
     @staticmethod
-    def train(model, optimizer, comps, prots, pair_y, metrics, transformer, tasks, max_iter=5000, tol=1e-6,
+    def train(model, optimizer, comps, prots, M, metrics, transformer, tasks, max_iter=5000, tol=1e-6,
               is_hsearch=False, sim_data_node=None, epoch_ckpt=(100, 10.0)):
         start = time.time()
         best_model_wts = model.state_dict()
@@ -116,15 +108,6 @@ class MF(Trainer):
         if sim_data_node:
             sim_data_node.data = [metrics_node]
 
-        labels_dict = defaultdict(lambda: float())
-        labels_dict.update(pair_y)
-
-        M = torch.zeros((len(comps), len(prots)))
-        # mask = torch.zeros_like(M)
-        # Construct matrix
-        for i, c in enumerate(comps):
-            for j, p in enumerate(prots):
-                M[i, j] = float(labels_dict[Pair(c, p)])
         if cuda:
             M = M.cuda()
 
@@ -168,11 +151,13 @@ class MF(Trainer):
         model.load_state_dict(best_model_wts)
 
         # map drug-target features
-        P, Q = model.P.t().numpy(), model.Q.t().numpy()
-        pairwise_vecs = {}
-        for c, v1 in zip(comps, P):
-            for p, v2 in zip(prots, Q):
-                pairwise_vecs[Pair(c, p)] = v1.tolist() + v1.tolist()
+        pairwise_vecs = None
+        if not is_hsearch:
+            pairwise_vecs = {}
+            P, Q = model.P.t().numpy(), model.Q.t().numpy()
+            for c, v1 in zip(comps, P):
+                for p, v2 in zip(prots, Q):
+                    pairwise_vecs[Pair(c, p)] = v1.tolist() + v1.tolist()
 
         return {'model': (model, pairwise_vecs), 'score': -min_error, 'epoch': best_epoch}
 
@@ -184,12 +169,13 @@ class MF(Trainer):
 def save_mf_model_and_feats(mf_objs, path, name):
     model, pairwise_vecs = mf_objs
     os.makedirs(path, exist_ok=True)
-    file = os.path.join(path, name + ".mod")
-    torch.save(model.state_dict(), file)
     # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
     #     f.write(name + '\n')
-    with open(os.path.join(path, name + '_pairwise_features_dict.pkl'), 'wb') as f:
-        pickle.dump(dict(pairwise_vecs), f)
+    if pairwise_vecs:
+        file = os.path.join(path, name + ".mod")
+        torch.save(model.state_dict(), file)
+        with open(os.path.join(path, name + '_pairwise_features_dict.pkl'), 'wb') as f:
+            pickle.dump(dict(pairwise_vecs), f)
 
 
 def main(flags):
@@ -378,9 +364,6 @@ if __name__ == '__main__':
     parser.add_argument("--dataset_file",
                         type=str,
                         help="Dataset file.")
-
-    # Either CV or standard train-val(-test) split.
-    scheme = parser.add_mutually_exclusive_group()
     parser.add_argument('--filter_threshold',
                         type=int,
                         default=6,
@@ -405,10 +388,6 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    # parser.add_argument('--data_dir',
-    #                     type=str,
-    #                     default='../../data/',
-    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -431,8 +410,6 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-
-    args = parser.parse_args()
 
     args = parser.parse_args()
     flags = Flags()

@@ -42,8 +42,8 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [1, 8, 64]
-
-seeds = [123, 124, 125]
+seeds = [100, 200, 300]
+# seeds = [123, 124, 125]
 
 torch.cuda.set_device(0)
 
@@ -532,6 +532,7 @@ def main(flags):
                         "gnn": "GNN"}.get(view)
             data_dict[view] = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict[view] = data_dict[view][2]
+            flags["gnn_fingerprint"] = data_dict[view][3]
 
             # Fingerprint dict for GNN if available
             if flags.fingerprint is not None:
@@ -571,7 +572,7 @@ def main(flags):
                     search_alg = {"random_search": RandomSearchCV,
                                   "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
                                                                             BayesianOptSearchCV)
-                    min_opt = "gp"
+                    min_opt = "gbrt"
                     hparam_search = search_alg(hparam_config=hparams_conf,
                                                num_folds=k,
                                                initializer=trainer.initialize,

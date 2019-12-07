@@ -42,7 +42,7 @@ from jova.utils.train_helpers import count_parameters, FrozenModels
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1, 8, 64]
+seeds = [100, 200, 300]
 # seeds = [123, 124, 125]
 check_data = False
 
@@ -609,7 +609,7 @@ def main(flags):
                     search_alg = {"random_search": RandomSearchCV,
                                   "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
                                                                             BayesianOptSearchCV)
-                    min_opt = "gp"
+                    min_opt = "gbrt"
                     hparam_search = search_alg(hparam_config=hparams_conf,
                                                num_folds=k,
                                                initializer=trainer.initialize,
@@ -627,7 +627,7 @@ def main(flags):
                                                results_file="{}_{}_dti_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=30, seed=seed)
+                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
                 print(stats)
                 print("Best params = {}".format(stats.best()))
             else:
@@ -733,32 +733,31 @@ def default_hparams_rand(flags):
 
 
 def default_hparams_bopt(flags):
-    prot_model = "rnn"
     return {
-        "latent_dim": 128,
-        "siamese_hdims": [512],
+        "latent_dim": 512,
+        "siamese_hdims": [1205, 660],
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout
-        "dprob": 0.4120111047648317,
+        "dprob": 0.44139203182247566,
 
-        "tr_batch_size": 128,
+        "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
         "optimizer": "adam",
-        "optimizer__global__weight_decay": 0.001,
-        "optimizer__global__lr": 0.0003,
+        "optimizer__global__weight_decay": 0.4517100308903878,
+        "optimizer__global__lr": 0.10024215203646224,
 
         "prot": {
-            "model_type": prot_model,
-            "dim": 32,
+            "model_type": 'rnn',
+            "dim": 9,
             "vocab_size": flags["prot_vocab_size"],
             "window": 11,
-            "rnn_hidden_state_dim": 10
+            "rnn_hidden_state_dim": 16
         },
         "weave": {
             "dim": 50,

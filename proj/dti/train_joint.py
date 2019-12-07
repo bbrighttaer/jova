@@ -18,6 +18,7 @@ from datetime import datetime as dt
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from soek import *
@@ -34,7 +35,7 @@ from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather
 from jova.nn.models import GraphConvSequential, PairSequential, create_fcn_layers
 from jova.trans import undo_transforms
 from jova.utils import Trainer
-from jova.utils.args import FcnArgs
+from jova.utils.args import FcnArgs, Flags
 from jova.utils.io import save_model, load_model
 from jova.utils.math import ExpAverage, Count
 from jova.utils.tb import TBMeanTracker
@@ -44,11 +45,12 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
-seeds = [1]  # , 8, 64]
+# seeds = [1, 8, 64]
+seeds = [128, 256, 512]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 
 
 def create_integrated_net(hparams):
@@ -458,7 +460,7 @@ class IntegratedViewDTI(Trainer):
         print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
 
 
-def main(flags):
+def main(pid, flags):
     sim_label = 'integrated_view_ecfp8_gconv_psc'
     print(sim_label)
 
@@ -752,29 +754,11 @@ if __name__ == '__main__':
                         default=6,
                         help='Threshold such that entities with observations no more than it would be filtered out.'
                         )
-    parser.add_argument('--cold_drug',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_target',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" targets in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_drug_cluster',
-                        default=False,
-                        help='Flag of whether the split will leave "cold cluster" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--predict_cold',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" entities in the test data.',
-                        action='store_true')
-    parser.add_argument('--split_warm',
-                        default=False,
-                        help='Flag of whether the split will not leave "cold" entities in the test data.',
-                        action='store_true'
+    parser.add_argument('--split',
+                        help='Splitting scheme to use. Options are: [warm, cold_drug, cold_target, cold_drug_target]',
+                        action='append',
+                        type=str,
+                        dest='split_schemes'
                         )
     parser.add_argument('--model_dir',
                         type=str,
@@ -791,17 +775,14 @@ if __name__ == '__main__':
                         help='A list containing paths to protein descriptors.'
                         )
     parser.add_argument('--no_reload',
-                        action="store_true",
+                        action="store_false",
+                        dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
     parser.add_argument('--latent_dimension',
                         type=int,
                         default=100,
                         help='The dimension of the latent space, same as annotation dimension.')
-    # parser.add_argument('--data_dir',
-    #                     type=str,
-    #                     default='../../data/',
-    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -816,30 +797,28 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument('--mp', '-mp', action='store_true', help="Multiprocessing option")
 
     args = parser.parse_args()
-
-    FLAGS = dict()
-    FLAGS['dataset_name'] = args.dataset_name
-    FLAGS['dataset_file'] = args.dataset_file
-    FLAGS['fold_num'] = args.fold_num
-    FLAGS['cv'] = True if FLAGS['fold_num'] > 2 else False
-    FLAGS['test'] = args.test
-    FLAGS['splitting_alg'] = args.splitting_alg
-    FLAGS['filter_threshold'] = args.filter_threshold
-    FLAGS['cold_drug'] = args.cold_drug
-    FLAGS['cold_target'] = args.cold_target
-    FLAGS['cold_drug_cluster'] = args.cold_drug_cluster
-    FLAGS['predict_cold'] = args.predict_cold
-    FLAGS['model_dir'] = args.model_dir
-    FLAGS['model_name'] = args.model_name
-    FLAGS['prot_desc_path'] = args.prot_desc_path
-    FLAGS['reload'] = not args.no_reload
-    # FLAGS['data_dir'] = args.data_dir
-    FLAGS['split_warm'] = args.split_warm
-    FLAGS['hparam_search'] = args.hparam_search
-    FLAGS["hparam_search_alg"] = args.hparam_search_alg
-    FLAGS["eval"] = args.eval
-    FLAGS["eval_model_name"] = args.eval_model_name
-
-    main(flags=FLAGS)
+    procs = []
+    use_mp = args.mp
+    for split in args.split_schemes:
+        flags = Flags()
+        args_dict = args.__dict__
+        for arg in args_dict:
+            setattr(flags, arg, args_dict[arg])
+        setattr(flags, "cv", True if flags.fold_num > 2 else False)
+        flags['split'] = split
+        flags['predict_cold'] = split == 'cold_drug_target'
+        flags['cold_drug'] = split == 'cold_drug'
+        flags['cold_target'] = split == 'cold_target'
+        flags['cold_drug_cluster'] = split == 'cold_drug_cluster'
+        flags['split_warm'] = split == 'warm'
+        if use_mp:
+            p = mp.spawn(fn=main, args=(flags,), join=False)
+            procs.append(p)
+            # p.start()
+        else:
+            main(0, flags)
+    for proc in procs:
+        proc.join()

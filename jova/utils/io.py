@@ -375,7 +375,7 @@ def save_numpy_array(array, path, name):
 
 
 def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformers, gnn_fingerprint, drug_kernel_dict,
-                                   prot_kernel_dict, simboost_pairwise_feats_dict):
+                                   prot_kernel_dict, simboost_pairwise_feats_dict, mf_entities_dict):
     assert fold_num > 1
     for i in range(fold_num):
         fold_dir = os.path.join(save_dir, "fold" + str(i + 1))
@@ -410,6 +410,9 @@ def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformer
     if simboost_pairwise_feats_dict is not None:
         with open(os.path.join(save_dir, "simboost_pairwise_feats_dict.pkl"), "wb") as f:
             pickle.dump(dict(simboost_pairwise_feats_dict), f)
+    if mf_entities_dict is not None:
+        with open(os.path.join(save_dir, 'mf_entities_dict.pkl'), 'wb') as f:
+            pickle.dump(dict(mf_entities_dict), f)
     return None
 
 
@@ -449,7 +452,7 @@ def save_kernel_data(kernel_data, test_data, test_dir, train_data, train_dir, va
 
 
 def save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_kernel_dict,
-                         prot_kernel_dict, simboost_pairwise_feats_dict, kernel_data):
+                         prot_kernel_dict, simboost_pairwise_feats_dict, kernel_data, mf_entities_dict):
     train_dir = os.path.join(save_dir, "train_dir")
     valid_dir = os.path.join(save_dir, "valid_dir")
     test_dir = os.path.join(save_dir, "test_dir")
@@ -477,6 +480,9 @@ def save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerp
     if simboost_pairwise_feats_dict is not None:
         with open(os.path.join(save_dir, "simboost_pairwise_feats_dict.pkl"), "wb") as f:
             pickle.dump(dict(simboost_pairwise_feats_dict), f)
+    if mf_entities_dict is not None:
+        with open(os.path.join(save_dir, 'mf_entities_dict.pkl'), 'wb') as f:
+            pickle.dump(dict(mf_entities_dict), f)
     return None
 
 
@@ -492,7 +498,7 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
         valid_dir = os.path.join(fold_dir, "valid_dir")
         test_dir = os.path.join(fold_dir, "test_dir")
         if not os.path.exists(train_dir):
-            return False, None, list(), None, None, None
+            return False, None, list(), None, None, None, None
         train = jova.data.DiskDataset(train_dir)
         valid = jova.data.DiskDataset(valid_dir) if os.path.exists(valid_dir) else None
         test = jova.data.DiskDataset(test_dir) if os.path.exists(test_dir) else None
@@ -511,6 +517,7 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
         kernel_data.append(kernel_files)
 
     gnn_fingerprint = None
+    mf_entities_dict = None
     simboost_pairwise_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
 
     if os.path.exists(os.path.join(save_dir, "gnn_fingerprint_dict.pkl")):
@@ -528,11 +535,14 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
         with open(os.path.join(save_dir, "simboost_pairwise_feats_dict.pkl"), "rb") as f:
             simboost_pairwise_feats_dict = pickle.load(f)
 
+    if os.path.exists(os.path.join(save_dir, 'mf_entities_dict.pkl')):
+        mf_entities_dict = load_dict_model(save_dir, 'mf_entities_dict.pkl')
+
     loaded = True
     with open(os.path.join(save_dir, "transformers.pkl"), 'rb') as f:
         transformers = pickle.load(f)
         return loaded, list(zip(train_data, valid_data, test_data, kernel_data)), transformers, gnn_fingerprint, \
-               (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_pairwise_feats_dict
+               (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_pairwise_feats_dict, mf_entities_dict
 
 
 def load_dataset_from_disk(save_dir):
@@ -556,7 +566,7 @@ def load_dataset_from_disk(save_dir):
     valid_dir = os.path.join(save_dir, "valid_dir")
     test_dir = os.path.join(save_dir, "test_dir")
     if not os.path.exists(train_dir):
-        return False, None, list(), None, None, None
+        return False, None, list(), None, None, None, None
 
     # check for and load kernel data if present
     kernel_files = get_kernel_filepaths(test_dir, train_dir, valid_dir)
@@ -568,6 +578,7 @@ def load_dataset_from_disk(save_dir):
             kernel_files[kfile] = pickle.load(f)
 
     gnn_fingerprint = None
+    mf_entities_dict = None
     simboost_pairwise_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
 
     if os.path.exists(os.path.join(save_dir, "gnn_fingerprint_dict.pkl")):
@@ -585,6 +596,9 @@ def load_dataset_from_disk(save_dir):
         with open(os.path.join(save_dir, "simboost_pairwise_feats_dict.pkl"), "rb") as f:
             simboost_pairwise_feats_dict = pickle.load(f)
 
+    if os.path.exists(os.path.join(save_dir, 'mf_entities_dict.pkl')):
+        mf_entities_dict = load_dict_model(save_dir, 'mf_entities_dict.pkl')
+
     loaded = True
     train = jova.data.DiskDataset(train_dir)
     valid = jova.data.DiskDataset(valid_dir) if os.path.exists(valid_dir) else None
@@ -593,7 +607,7 @@ def load_dataset_from_disk(save_dir):
     with open(os.path.join(save_dir, "transformers.pkl"), 'rb') as f:
         transformers = pickle.load(f)
         return loaded, all_dataset, transformers, gnn_fingerprint, \
-               (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_pairwise_feats_dict
+               (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_pairwise_feats_dict, mf_entities_dict
 
 
 def get_kernel_filepaths(test_dir, train_dir, valid_dir):

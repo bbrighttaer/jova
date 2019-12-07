@@ -64,23 +64,23 @@ def load_dti_data(featurizer, dataset_name, dataset_file, prot_seq_dict, input_p
     if cross_validation:
         test = False
     tasks, all_dataset, transformers, \
-    fp, kernel_dicts, simboost_feats = load_csv_dataset(dataset_name, dataset_file,
-                                                        featurizer=featurizer,
-                                                        cross_validation=cross_validation,
-                                                        test=test, split=split,
-                                                        reload=reload,
-                                                        K=fold_num, mode=mode,
-                                                        predict_cold=predict_cold,
-                                                        cold_drug=cold_drug,
-                                                        cold_target=cold_target,
-                                                        cold_drug_cluster=cold_drug_cluster,
-                                                        split_warm=split_warm,
-                                                        prot_seq_dict=prot_seq_dict,
-                                                        filter_threshold=filter_threshold,
-                                                        input_protein=input_protein,
-                                                        seed=seed,
-                                                        simboost_mf_feats_dict=simboost_mf_feats_dict)
-    return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_feats
+    fp, kernel_dicts, simboost_feats, MF_entities_dict = load_csv_dataset(dataset_name, dataset_file,
+                                                                          featurizer=featurizer,
+                                                                          cross_validation=cross_validation,
+                                                                          test=test, split=split,
+                                                                          reload=reload,
+                                                                          K=fold_num, mode=mode,
+                                                                          predict_cold=predict_cold,
+                                                                          cold_drug=cold_drug,
+                                                                          cold_target=cold_target,
+                                                                          cold_drug_cluster=cold_drug_cluster,
+                                                                          split_warm=split_warm,
+                                                                          prot_seq_dict=prot_seq_dict,
+                                                                          filter_threshold=filter_threshold,
+                                                                          input_protein=input_protein,
+                                                                          seed=seed,
+                                                                          simboost_mf_feats_dict=simboost_mf_feats_dict)
+    return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_feats, MF_entities_dict
 
 
 def load_proteins(prot_desc_path):
@@ -727,3 +727,22 @@ def compute_train_val_test_kronrls_mats(train, val, test, Kd_dict, Kt_dict):
     W_test = np.array([[weights_test[Pair(c, p)] for p in test_prot] for c in test_mol], dtype=np.float)
 
     return {'train': (KD, KT, Y, W), 'val': (KD_val, KT_val, Y_val, W_val), 'test': (KD_test, KT_test, Y_test, W_test)}
+
+
+def compute_MF_entities_matrix(dataset):
+    all_comps = set()
+    all_prots = set()
+    pair_to_value_y = defaultdict(lambda: float())
+    for x, y, w, id in dataset.itersamples():
+        mol, prot = x
+        all_comps.add(mol)
+        all_prots.add(prot)
+        pair_to_value_y[Pair(mol, prot)] = y
+
+    M = torch.zeros((len(all_comps), len(all_prots)))
+    # mask = torch.zeros_like(M)
+    # Construct matrix
+    for i, c in enumerate(all_comps):
+        for j, p in enumerate(all_prots):
+            M[i, j] = float(pair_to_value_y[Pair(c, p)])
+    return {'labels': M, 'compounds': all_comps, 'proteins': all_prots}

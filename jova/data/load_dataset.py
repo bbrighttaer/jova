@@ -25,6 +25,7 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
 
     feat_label = featurizer
     gnn_fingerprint = None
+    MF_entities_dict = None
     # for SimBoost, Kron-RLS and other kernel-based methods
     simboost_drug_target_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
 
@@ -61,13 +62,13 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
             delim = "_CV" + delim
             save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
             loaded, all_dataset, transformers, fp, kernel_dicts, \
-            simboost_drug_target_feats_dict = load_nested_cv_dataset_from_disk(save_dir, K)
+            simboost_drug_target_feats_dict, MF_entities_dict = load_nested_cv_dataset_from_disk(save_dir, K)
         else:
             save_dir = os.path.join(data_dir, featurizer + delim + mode + "/" + split + "_seed_" + str(seed))
-            loaded, all_dataset, transformers, fp, \
-            kernel_dicts, simboost_drug_target_feats_dict = load_dataset_from_disk(save_dir)
+            loaded, all_dataset, transformers, fp, kernel_dicts, \
+            simboost_drug_target_feats_dict, MF_entities_dict = load_dataset_from_disk(save_dir)
         if loaded:
-            return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_drug_target_feats_dict
+            return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_drug_target_feats_dict, MF_entities_dict
 
     dataset_file = os.path.join(data_dir, file_name)
     if featurizer == 'Weave':
@@ -107,6 +108,9 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
     elif feat_label in ['SB_ECFP8', 'SB_ECFP4']:
         from jova.data.data import compute_simboost_drug_target_features
         simboost_drug_target_feats_dict = compute_simboost_drug_target_features(dataset, simboost_mf_feats_dict)
+    elif feat_label in ['MF_ECFP8', 'MF_ECFP4']:
+        from jova.data.data import compute_MF_entities_matrix
+        MF_entities_dict = compute_MF_entities_matrix(dataset)
 
     splitters = {
         'no_split': splits.NoSplit(),
@@ -135,7 +139,7 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
         all_dataset = (train, valid, test, kernel_data)
         if reload:
             save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_sim_kernel_dict,
-                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data)
+                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data, MF_entities_dict)
     elif cross_validation:
         fold_datasets = splitter.k_fold_split(dataset, K, seed=seed)
         fold_datasets = list(fold_datasets)
@@ -153,7 +157,9 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
         all_dataset = fold_datasets
         if reload:
             save_nested_cv_dataset_to_disk(save_dir, all_dataset, K, transformers, gnn_fingerprint,
-                                           drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict)
+                                           drug_sim_kernel_dict, prot_sim_kernel_dict,
+                                           simboost_drug_target_feats_dict,
+                                           MF_entities_dict)
     else:
         kernel_data = None
         # not cross validating, and not testing.
@@ -168,10 +174,10 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
         all_dataset = (train, valid, test, kernel_data)
         if reload:
             save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_sim_kernel_dict,
-                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data)
+                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data, MF_entities_dict)
 
     return tasks, all_dataset, transformers, gnn_fingerprint, \
-           (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_drug_target_feats_dict
+           (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_drug_target_feats_dict, MF_entities_dict
 
 
 def _wrap_kernel_data(kernel_data):
