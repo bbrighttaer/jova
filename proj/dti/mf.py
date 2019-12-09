@@ -15,21 +15,20 @@ import os
 import pickle
 import random
 import time
-from collections import defaultdict
 from datetime import datetime as dt
 
 import numpy as np
 import torch
-from jova import cuda
 from soek import *
 
 import jova.metrics as mt
+from jova import cuda
 from jova.data import get_data, load_proteins
-from jova.data.data import Pair
 from jova.metrics import compute_model_performance
 from jova.nn.models import MatrixFactorization
 from jova.utils import Trainer
 from jova.utils.math import ExpAverage
+from jova.utils.train_helpers import parse_hparams
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -130,9 +129,6 @@ class MF(Trainer):
 
             ep_loss = np.nanmean(losses)
             e_avg.update(ep_loss)
-            # if epoch % (epoch_ckpt[0] - 1) == 0 and epoch > 0:
-            #     if e_avg.value > epoch_ckpt[1]:
-            #         terminate_training = True
 
             # Adjust the learning rate.
             # scheduler.step()
@@ -151,15 +147,10 @@ class MF(Trainer):
         model.load_state_dict(best_model_wts)
 
         # map drug-target features
-        pairwise_vecs = None
-        if not is_hsearch:
-            pairwise_vecs = {}
-            P, Q = model.P.t().numpy(), model.Q.t().numpy()
-            for c, v1 in zip(comps, P):
-                for p, v2 in zip(prots, Q):
-                    pairwise_vecs[Pair(c, p)] = v1.tolist() + v1.tolist()
-
-        return {'model': (model, pairwise_vecs), 'score': -min_error, 'epoch': best_epoch}
+        mf_simboost_data_dict = {'comp_mat': model.P.t().numpy(), 'prot_mat': model.Q.t().numpy(),
+                                 'comp_index': {c: i for i, c in enumerate(comps)},
+                                 'prot_index': {p: j for j, p in enumerate(prots)}}
+        return {'model': (model, mf_simboost_data_dict), 'score': -min_error, 'epoch': best_epoch}
 
     @staticmethod
     def evaluate_model():
@@ -167,15 +158,15 @@ class MF(Trainer):
 
 
 def save_mf_model_and_feats(mf_objs, path, name):
-    model, pairwise_vecs = mf_objs
+    model, mf_simboost_data_dict = mf_objs
     os.makedirs(path, exist_ok=True)
     # with open(os.path.join(path, "dummy_save.txt"), 'a') as f:
     #     f.write(name + '\n')
-    if pairwise_vecs:
+    if mf_simboost_data_dict:
         file = os.path.join(path, name + ".mod")
         torch.save(model.state_dict(), file)
-        with open(os.path.join(path, name + '_pairwise_features_dict.pkl'), 'wb') as f:
-            pickle.dump(dict(pairwise_vecs), f)
+        with open(os.path.join(path, name + '_mf_simboost_data_dict.pkl'), 'wb') as f:
+            pickle.dump(dict(mf_simboost_data_dict), f)
 
 
 def main(flags):
@@ -191,8 +182,7 @@ def main(flags):
         print(sim_label)
 
         # Simulation data resource tree
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
+        split_label = flags.split
         node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
                                                 "eval" if flags["eval"] else "train", date_label)
         sim_data = DataNode(label=node_label)
@@ -275,14 +265,23 @@ def main(flags):
                 print(stats)
                 print("Best params = {}".format(stats.best()))
             else:
-                invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label)
+                invoke_train(trainer, tasks, data, transformer, flags, data_node, sim_label, dataset_lbl)
 
         # save simulation data resource tree to file.
         sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data, transformer, flags, data_node, view):
-    hyper_params = default_hparams_bopt(flags)
+def invoke_train(trainer, tasks, data, transformer, flags, data_node, view, dataset_lbl):
+    try:
+        hfile = os.path.join('soek_res', get_hparam_file(dataset_lbl))
+        exists = os.path.exists(hfile)
+        status = 'Found' if exists else 'Not Found, switching to default hyperparameters'
+        print(f'Hyperparameters file:{hfile}, status={status}')
+        if not exists:
+            raise FileNotFoundError(f'{hfile} not found')
+        hyper_params = parse_hparams(hfile)
+    except:
+        hyper_params = default_hparams_bopt(flags)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
         folds_data = []
@@ -310,8 +309,7 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transfo
                                 tasks=tasks, sim_data_node=sim_data_node)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
+        split_label = flags.split
         save_mf_model_and_feats(model, flags["model_dir"],
                                 "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
                                                                split_label, epoch, score))
@@ -343,6 +341,13 @@ def get_hparam_config(flags):
         "optimizer__global__weight_decay": LogRealParam(),
         "optimizer__global__lr": LogRealParam(),
     }
+
+
+def get_hparam_file(dataset):
+    return {'davis': 'bayopt_search_MF_davis_ecfp8_psc_dti_2019_11_27__13_22_48_gp_3000.csv',
+            'metz': 'bayopt_search_MF_metz_ecfp8_psc_dti_2019_12_06__17_48_17_gp_3000.csv',
+            'kiba': 'bayopt_search_MF_kiba_ecfp8_psc_dti_2019_12_08__03_05_59_gp_3000.csv',
+            }.get(dataset.lower(), None)
 
 
 class Flags(object):

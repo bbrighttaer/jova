@@ -32,7 +32,7 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
-seeds = [1]  # , 8, 64]
+seeds = [1, 8, 64]
 
 
 class SimBoost(Trainer):
@@ -221,7 +221,7 @@ def main(flags):
         sim_data.data = nodes_list
 
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
-        pairwise_feats_dict = load_dict_model(flags['model_dir'], flags['pairwise_feats_dict'])
+        mf_simboost_data_dict = load_dict_model(flags['model_dir'], flags['mf_simboost_data_dict'])
 
         # For searching over multiple seeds
         hparam_search = None
@@ -242,7 +242,7 @@ def main(flags):
             data_key = {"ecfp4": "SB_ECFP4",
                         "ecfp8": "SB_ECFP8"}.get(cview)
             data = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed,
-                            simboost_mf_feats_dict=pairwise_feats_dict)
+                            mf_simboost_data_dict=mf_simboost_data_dict)
             tasks = data[0]
             flags["tasks"] = tasks
             simboost_feats_dict = data[5]
@@ -417,30 +417,6 @@ if __name__ == '__main__':
                         default=6,
                         help='Threshold such that entities with observations no more than it would be filtered out.'
                         )
-    parser.add_argument('--cold_drug',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_target',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" targets in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_drug_cluster',
-                        default=False,
-                        help='Flag of whether the split will leave "cold cluster" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--predict_cold',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" entities in the test data.',
-                        action='store_true')
-    parser.add_argument('--split_warm',
-                        default=False,
-                        help='Flag of whether the split will not leave "cold" entities in the test data.',
-                        action='store_true'
-                        )
     parser.add_argument('--model_dir',
                         type=str,
                         default='./model_dir',
@@ -460,10 +436,6 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    # parser.add_argument('--data_dir',
-    #                     type=str,
-    #                     default='../../data/',
-    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -486,12 +458,10 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--pairwise_feats_dict",
+    parser.add_argument("--mf_simboost_data_dict",
                         type=str,
                         help="The filename of the Matrix Factorization drug-target features dict to be "
                              "loaded from the directory specified in --model_dir")
-
-    args = parser.parse_args()
 
     args = parser.parse_args()
     flags = Flags()
@@ -500,4 +470,11 @@ if __name__ == '__main__':
         setattr(flags, arg, args_dict[arg])
     setattr(flags, "cv", True if flags.fold_num > 2 else False)
     setattr(flags, "views", [(cv, pv) for cv, pv in zip(args.comp_view, args.prot_view)])
+    split = 'warm'
+    flags['split'] = split
+    flags['predict_cold'] = split == 'cold_drug_target'
+    flags['cold_drug'] = split == 'cold_drug'
+    flags['cold_target'] = split == 'cold_target'
+    flags['cold_drug_cluster'] = split == 'cold_drug_cluster'
+    flags['split_warm'] = split == 'warm'
     main(flags)

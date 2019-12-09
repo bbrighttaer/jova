@@ -17,7 +17,7 @@ from jova.utils.io import save_nested_cv_dataset_to_disk, save_dataset_to_disk, 
 def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_validation=False, test=False, split='random',
                      reload=True, K=5, mode='regression', predict_cold=False, cold_drug=False, cold_target=False,
                      cold_drug_cluster=False, split_warm=False, filter_threshold=0, prot_seq_dict=None,
-                     oversampled=False, input_protein=True, seed=0, gnn_radius=2, simboost_mf_feats_dict=None):
+                     oversampled=False, input_protein=True, seed=0, gnn_radius=2, mf_simboost_data_dict=None):
     if cross_validation:
         assert not test
 
@@ -107,7 +107,7 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
         drug_sim_kernel_dict, prot_sim_kernel_dict = compute_similarity_kernel_matrices(dataset)
     elif feat_label in ['SB_ECFP8', 'SB_ECFP4']:
         from jova.data.data import compute_simboost_drug_target_features
-        simboost_drug_target_feats_dict = compute_simboost_drug_target_features(dataset, simboost_mf_feats_dict)
+        simboost_drug_target_feats_dict = compute_simboost_drug_target_features(dataset, mf_simboost_data_dict)
     elif feat_label in ['MF_ECFP8', 'MF_ECFP4']:
         from jova.data.data import compute_MF_entities_matrix
         MF_entities_dict = compute_MF_entities_matrix(dataset)

@@ -676,11 +676,11 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                 sim_data_node=sim_data_node)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
+        split_label = flags.split
         jova.utils.io.save_model(model, flags["model_dir"],
-                                 "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
-                                                                split_label, epoch, score))
+                                 "{}_two_way_attn_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view,
+                                                                             flags["model_name"],
+                                                                             split_label, epoch, score))
 
 
 def default_hparams_rand(flags):

@@ -17,6 +17,7 @@ from datetime import datetime as dt
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from soek import *
@@ -32,7 +33,7 @@ from jova.nn.layers import GraphConvLayer, GraphPool, GraphGather
 from jova.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, ProteinCNNAttention, \
     ProtCnnForward, GraphNeuralNet, Prot2Vec
 from jova.trans import undo_transforms
-from jova.utils import Trainer, io
+from jova.utils import Trainer
 from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from jova.utils.io import save_model, load_model, load_pickle
 from jova.utils.math import ExpAverage
@@ -41,11 +42,11 @@ from jova.utils.train_helpers import count_parameters, FrozenModels
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [1, 8, 64]
-seeds = [100, 200, 300]
+seeds = [1, 8, 64]
+# seeds = [100, 200, 300]
 # seeds = [123, 124, 125]
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 
 
 def create_ecfp_net(hparams):
@@ -475,7 +476,7 @@ class CPIBaseline(Trainer):
         print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
 
 
-def main(flags):
+def main(pid, flags):
     if len(flags.views) > 0:
         print("Single views for training:", flags.views)
     else:
@@ -486,8 +487,7 @@ def main(flags):
         print("CUDA={}, view={}".format(cuda, view))
 
         # Simulation data resource tree
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
+        split_label = flags.split
         dataset_lbl = flags["dataset_name"]
         node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, view, split_label, "eval" if flags["eval"] else "train",
                                              date_label)
@@ -501,9 +501,7 @@ def main(flags):
         # Runtime Protein stuff
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
         prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
-        # pretrained_embeddings = None # load_numpy_array(flags.protein_embeddings)
         flags["prot_vocab_size"] = len(prot_vocab)
-        # flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
 
         # For searching over multiple seeds
         hparam_search = None
@@ -533,10 +531,6 @@ def main(flags):
             data_dict[view] = get_data(data_key, flags, prot_sequences=prot_seq_dict, seed=seed)
             transformers_dict[view] = data_dict[view][2]
             flags["gnn_fingerprint"] = data_dict[view][3]
-
-            # Fingerprint dict for GNN if available
-            if flags.fingerprint is not None:
-                flags["gnn_fingerprint"] = load_pickle(file_name=flags.fingerprint)
 
             tasks = data_dict[view][0]
             flags["tasks"] = tasks
@@ -599,7 +593,7 @@ def main(flags):
                              view, prot_profile)
 
         # save simulation data resource tree to file.
-        # sim_data.to_json(path="./analysis/")
+        sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
@@ -635,15 +629,14 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     else:
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, frozen_models,
-                                transformers_dict, prot_desc_dict, tasks, max_iter=10000, view_lbl=view,
+                                transformers_dict, prot_desc_dict, tasks, n_iters=10000, view_lbl=view,
                                 sim_data_node=sim_data_node)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
+        split_label = flags.split
         save_model(model, flags["model_dir"],
-                   "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"], split_label, epoch,
-                                                  score))
+                   "{}_pcnna_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"], split_label,
+                                                        epoch, score))
 
 
 def default_hparams_rand(flags, view):
@@ -683,30 +676,30 @@ def default_hparams_rand(flags, view):
 def default_hparams_bopt(flags, view):
     return {
         "view": view,
-        "hdims": [653, 3635],
+        "hdims": [2092],
         "output_dim": len(flags.tasks),
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout regs
-        "dprob": 0.096421,
+        "dprob": 0.12967965527359,
 
-        "tr_batch_size": 128,
+        "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
-        "optimizer": "adadelta",
-        "optimizer__global__weight_decay": 0.004665,
-        "optimizer__global__lr": 0.04158,
+        "optimizer": "adamax",
+        "optimizer__global__weight_decay": 0.0016123580093276922,
+        "optimizer__global__lr": 0.00330365625227763,
         "optimizer__adadelta__rho": 0.115873,
 
         "prot": {
-            "dim": 10,
+            "dim": 30,
             "vocab_size": flags["prot_vocab_size"],
             "window": 11,
-            "prot_cnn_num_layers": 2
+            "prot_cnn_num_layers": 3
         },
         "weave": {
             "dim": 50,
@@ -721,8 +714,8 @@ def default_hparams_bopt(flags, view):
         },
         "gnn": {
             "fingerprint_size": len(flags["gnn_fingerprint"]),
-            "num_layers": 3,
-            "dim": 100,
+            "num_layers": 2,
+            "dim": 500,
         }
     }
 
@@ -814,29 +807,11 @@ if __name__ == '__main__':
                         default=6,
                         help='Threshold such that entities with observations no more than it would be filtered out.'
                         )
-    parser.add_argument('--cold_drug',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_target',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" targets in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_drug_cluster',
-                        default=False,
-                        help='Flag of whether the split will leave "cold cluster" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--predict_cold',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" entities in the test data.',
-                        action='store_true')
-    parser.add_argument('--split_warm',
-                        default=False,
-                        help='Flag of whether the split will not leave "cold" entities in the test data.',
-                        action='store_true'
+    parser.add_argument('--split',
+                        help='Splitting scheme to use. Options are: [warm, cold_drug, cold_target, cold_drug_target]',
+                        action='append',
+                        type=str,
+                        dest='split_schemes'
                         )
     parser.add_argument('--model_dir',
                         type=str,
@@ -860,20 +835,11 @@ if __name__ == '__main__':
                         type=str,
                         help='A resource containing all N-gram segments/words constructed from the protein sequences.'
                         )
-    # parser.add_argument('--prot_embeddings',
-    #                     type=str,
-    #                     dest="protein_embeddings",
-    #                     help='Numpy array file containing the pretrained protein "words" embeddings'
-    #                     )
     parser.add_argument('--no_reload',
                         action="store_false",
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    # parser.add_argument('--data_dir',
-    #                     type=str,
-    #                     default='../../data/',
-    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -897,11 +863,28 @@ if __name__ == '__main__':
                         type=str,
                         help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
                              "neighbors")
+    parser.add_argument('--mp', '-mp', action='store_true', help="Multiprocessing option")
 
     args = parser.parse_args()
-    flags = Flags()
-    args_dict = args.__dict__
-    for arg in args_dict:
-        setattr(flags, arg, args_dict[arg])
-    setattr(flags, "cv", True if flags.fold_num > 2 else False)
-    main(flags)
+    procs = []
+    use_mp = args.mp
+    for split in args.split_schemes:
+        flags = Flags()
+        args_dict = args.__dict__
+        for arg in args_dict:
+            setattr(flags, arg, args_dict[arg])
+        setattr(flags, "cv", True if flags.fold_num > 2 else False)
+        flags['split'] = split
+        flags['predict_cold'] = split == 'cold_drug_target'
+        flags['cold_drug'] = split == 'cold_drug'
+        flags['cold_target'] = split == 'cold_target'
+        flags['cold_drug_cluster'] = split == 'cold_drug_cluster'
+        flags['split_warm'] = split == 'warm'
+        if use_mp:
+            p = mp.spawn(fn=main, args=(flags,), join=False)
+            procs.append(p)
+            # p.start()
+        else:
+            main(0, flags)
+    for proc in procs:
+        proc.join()

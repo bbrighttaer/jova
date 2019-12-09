@@ -60,7 +60,7 @@ def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
 def load_dti_data(featurizer, dataset_name, dataset_file, prot_seq_dict, input_protein=True, cross_validation=False,
                   test=False, fold_num=5, split='random', reload=True, predict_cold=False, cold_drug=False,
                   cold_target=False, cold_drug_cluster=False, split_warm=False, filter_threshold=0,
-                  mode='regression', seed=0, simboost_mf_feats_dict=None):
+                  mode='regression', seed=0, mf_simboost_data_dict=None):
     if cross_validation:
         test = False
     tasks, all_dataset, transformers, \
@@ -79,7 +79,7 @@ def load_dti_data(featurizer, dataset_name, dataset_file, prot_seq_dict, input_p
                                                                           filter_threshold=filter_threshold,
                                                                           input_protein=input_protein,
                                                                           seed=seed,
-                                                                          simboost_mf_feats_dict=simboost_mf_feats_dict)
+                                                                          mf_simboost_data_dict=mf_simboost_data_dict)
     return tasks, all_dataset, transformers, fp, kernel_dicts, simboost_feats, MF_entities_dict
 
 
@@ -347,7 +347,7 @@ def cuda(tensor):
         return tensor
 
 
-def get_data(featurizer, flags, prot_sequences, seed, simboost_mf_feats_dict=None):
+def get_data(featurizer, flags, prot_sequences, seed, mf_simboost_data_dict=None):
     # logger = get_logger(name="Data loader")
     print("--------------About to load {}-{} data-------------".format(featurizer, flags['dataset_name']))
     try:
@@ -369,7 +369,7 @@ def get_data(featurizer, flags, prot_sequences, seed, simboost_mf_feats_dict=Non
                              mode='regression',
                              seed=seed,
                              filter_threshold=flags["filter_threshold"],
-                             simboost_mf_feats_dict=simboost_mf_feats_dict)
+                             mf_simboost_data_dict=mf_simboost_data_dict)
     finally:
         print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset_name']))
 
@@ -420,7 +420,7 @@ def compute_similarity_kernel_matrices(dataset):
     return comps_mat, prots_mat
 
 
-def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim_threshold=0.5):
+def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=10, sim_threshold=0.5):
     """
     Constructs the type 1,2, and 3 features (with the matrix factorization part) of SimBoost as described in:
     https://jcheminf.biomedcentral.com/articles/10.1186/s13321-017-0209-z
@@ -431,7 +431,7 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
     :param dataset:
     :return:
     """
-    assert isinstance(pairwise_feats, dict), "Drug-Target features dictionary must be provided."
+    assert isinstance(mf_simboost_data_dict, dict), "Drug-Target features dictionary must be provided."
     print('SimBoost Drug-Target feature vector computation started')
     pbar = UnboundedProgressbar()
     pbar.start()
@@ -493,11 +493,22 @@ def compute_simboost_drug_target_features(dataset, pairwise_feats, nbins=10, sim
     # pagerank = nx.pagerank(Mgraph, tol=1e-3, max_iter=1000)
     drug_target_feats_dict = defaultdict(lambda: list())
     vec_lengths = []
+
+    # Retrieve data from the Matrix Factorization stage
+    comp_mat = mf_simboost_data_dict['comp_mat']
+    prot_mat = mf_simboost_data_dict['prot_mat']
+    comp_index = mf_simboost_data_dict['comp_index']
+    prot_index = mf_simboost_data_dict['prot_index']
+
     for pair in pair_to_value_y:
         comp, prot = pair.p1, pair.p2
         feat = drug_target_feats_dict[Pair(comp, prot)]
         # mf
-        mf = pairwise_feats[Pair(comp, prot)]
+        cidx = comp_index[comp]
+        pidx = prot_index[prot]
+        c_vec = comp_mat[cidx].tolist()
+        p_vec = prot_mat[pidx].tolist()
+        mf = c_vec + p_vec
         feat.extend(mf)
 
         # d.t.ave
@@ -730,6 +741,12 @@ def compute_train_val_test_kronrls_mats(train, val, test, Kd_dict, Kt_dict):
 
 
 def compute_MF_entities_matrix(dataset):
+    """
+    Computes the label matrix (M) for the Matrix Factorization stage of SimBoost.
+
+    :param dataset:
+    :return:
+    """
     all_comps = set()
     all_prots = set()
     pair_to_value_y = defaultdict(lambda: float())
@@ -740,7 +757,6 @@ def compute_MF_entities_matrix(dataset):
         pair_to_value_y[Pair(mol, prot)] = y
 
     M = torch.zeros((len(all_comps), len(all_prots)))
-    # mask = torch.zeros_like(M)
     # Construct matrix
     for i, c in enumerate(all_comps):
         for j, p in enumerate(all_prots):
