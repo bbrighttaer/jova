@@ -12,12 +12,14 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import os
 import random
 import time
 from datetime import datetime as dt
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from soek import *
@@ -41,18 +43,18 @@ from jova.utils.attn_helpers import MultimodalAttentionData
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
 from jova.utils.tb import TBMeanTracker
-from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels, ViewsReg
+from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels, ViewsReg, parse_hparams
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [1, 8, 64]
-seeds = [7, 491]  # [100, 7, 491]
-# seeds = [123, 124, 125]
+# seeds = [7, 491]  # [100, 7, 491]
+seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(1)
 
 joint_attention_data = MultimodalAttentionData()
 
@@ -736,7 +738,7 @@ def np_to_plot_data(y):
         return y.squeeze().tolist()
 
 
-def main(flags):
+def main(pid, flags):
     # Load protein data
     prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
     prot_profile = load_pickle(file_name=flags.prot_profile)
@@ -763,8 +765,7 @@ def main(flags):
         print("CUDA={}, view={}".format(cuda, sim_label))
 
         # Simulation data resource tree
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
+        split_label = flags.split
         dataset_lbl = flags["dataset_name"]
 
         if flags["eval"]:
@@ -787,9 +788,9 @@ def main(flags):
 
         for seed in seeds:
             summary_writer_creator = lambda: SummaryWriter(log_dir="tb_jova"
-                                                                   "/{}_{}_{}/".format(sim_label, seed,
-                                                                                       dt.now().strftime(
-                                                                                           "%Y_%m_%d__%H_%M_%S")))
+                                                                   "/{}_{}_{}_{}/".format(sim_label, seed, split_label,
+                                                                                          dt.now().strftime(
+                                                                                              "%Y_%m_%d__%H_%M_%S")))
 
             # for data collection of this round of simulation.
             data_node = DataNode(label="seed_%d" % seed)
@@ -881,12 +882,22 @@ def main(flags):
                                  prot_profile, pretrained_embeddings, prot_vocab, summary_writer_creator)
 
         # save simulation data resource tree to file.
-        # sim_data.to_json(path="./analysis/")
+        sim_data.to_json(path="./analysis/")
 
 
 def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, protein_profile,
                  protein_embeddings, prot_vocab, tb_writer):
-    hyper_params = default_hparams_bopt(flags)
+    try:
+        hfile = os.path.join('soek_res', get_hparam_file())
+        exists = os.path.exists(hfile)
+        status = 'Found' if exists else 'Not Found, switching to default hyperparameters'
+        print(f'Hyperparameters file:{hfile}, status={status}')
+        if not exists:
+            raise FileNotFoundError(f'{hfile} not found')
+        hyper_params = parse_hparams(hfile)
+    except:
+        hyper_params = default_hparams_bopt(flags)
+
     # Initialize the model and other related entities for training.
     if flags["cv"]:
         folds_data = []
@@ -921,16 +932,13 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     else:
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, prot_model_types,
-                                frozen_models, transformers_dict, prot_desc_dict, tasks, max_iter=10000,
+                                frozen_models, transformers_dict, prot_desc_dict, tasks, n_iters=10000,
                                 sim_data_node=sim_data_node, tb_writer=tb_writer)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
         jova.utils.io.save_model(model, flags["model_dir"],
-                                 "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset"], view, flags["model_name"],
-                                                                split_label, epoch,
-                                                                score))
+                                 "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
+                                                                flags.split, epoch, score))
 
 
 def default_hparams_rand(flags):
@@ -1113,6 +1121,19 @@ def get_hparam_config(flags):
     return config
 
 
+def get_hparam_file():
+    cv = '-'.join(views_reg.c_views)
+    pv = '-'.join(views_reg.p_views)
+    return {
+        'ecfp8-gconv__psc': 'bayopt_search_integrated_view_attn_no_gan_psc_ecfp8_gconv_dti_2019_11_21__16_08_16_gp.csv',
+        'ecfp8-gnn__psc': 'bayopt_search_integrated_view_attn_no_gan_psc_ecfp8_gnn_dti_2019_11_21__16_08_16_gp.csv',
+        'ecfp8-gconv__pcnn2d': 'bayopt_search_integrated_view_attn_no_gan_pcnn2d_ecfp8_gconv_dti_2019_11_27__21_57_05_gp.csv',
+        'ecfp8-weave__psc': 'bayopt_search_integrated_view_attn_no_gan_psc_ecfp8_weave_dti_2019_11_27__21_57_05_gp.csv',
+        'ecfp8-gnn__pcnn2d-psc': 'bayopt_search_integrated_view_attn_no_gan_pcnn2d_psc_ecfp8_gnn_dti_2019_11_27__21_57_05_gp.csv',
+        'ecfp8-gconv__rnn-psc': 'bayopt_search_integrated_view_attn_no_gan_rnn_psc_ecfp8_gconv_dti_2019_12_05__04_03_42_gbrt.csv',
+    }.get(f'{cv}__{pv}', None)
+
+
 def verify_multiview_data(data_dict, cv_data=True):
     if cv_data:
         ecfp8_data = data_dict["ecfp8"][1][0][0]
@@ -1176,29 +1197,11 @@ if __name__ == '__main__':
                         default=6,
                         help='Threshold such that entities with observations no more than it would be filtered out.'
                         )
-    parser.add_argument('--cold_drug',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_target',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" targets in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--cold_drug_cluster',
-                        default=False,
-                        help='Flag of whether the split will leave "cold cluster" drugs in the test data.',
-                        action='store_true'
-                        )
-    parser.add_argument('--predict_cold',
-                        default=False,
-                        help='Flag of whether the split will leave "cold" entities in the test data.',
-                        action='store_true')
-    parser.add_argument('--split_warm',
-                        default=False,
-                        help='Flag of whether the split will not leave "cold" entities in the test data.',
-                        action='store_true'
+    parser.add_argument('--split',
+                        help='Splitting scheme to use. Options are: [warm, cold_drug, cold_target, cold_drug_target]',
+                        action='append',
+                        type=str,
+                        dest='split_schemes'
                         )
     parser.add_argument('--model_dir',
                         type=str,
@@ -1232,10 +1235,6 @@ if __name__ == '__main__':
                         dest='reload',
                         help='Whether datasets will be reloaded from existing ones or newly constructed.'
                         )
-    # parser.add_argument('--data_dir',
-    #                     type=str,
-    #                     default='../../data/',
-    #                     help='Root folder of data (Davis, KIBA, Metz) folders.')
     parser.add_argument("--hparam_search",
                         action="store_true",
                         help="If true, hyperparameter searching would be performed.")
@@ -1262,11 +1261,28 @@ if __name__ == '__main__':
                              "the argument would be:\tecfp8-gconv;psc-rnn\n"
                              "Available compound views:[ecfp8,weave,gconv,gnn]\n Available protien views:"
                              "[psc,rnn,p2v,pcnn, pcnn2d]")
+    parser.add_argument('--mp', '-mp', action='store_true', help="Multiprocessing option")
 
     args = parser.parse_args()
-    flags = Flags()
-    args_dict = args.__dict__
-    for arg in args_dict:
-        setattr(flags, arg, args_dict[arg])
-    setattr(flags, "cv", True if flags.fold_num > 2 else False)
-    main(flags)
+    procs = []
+    use_mp = args.mp
+    for split in args.split_schemes:
+        flags = Flags()
+        args_dict = args.__dict__
+        for arg in args_dict:
+            setattr(flags, arg, args_dict[arg])
+        setattr(flags, "cv", True if flags.fold_num > 2 else False)
+        flags['split'] = split
+        flags['predict_cold'] = split == 'cold_drug_target'
+        flags['cold_drug'] = split == 'cold_drug'
+        flags['cold_target'] = split == 'cold_target'
+        flags['cold_drug_cluster'] = split == 'cold_drug_cluster'
+        flags['split_warm'] = split == 'warm'
+        if use_mp:
+            p = mp.spawn(fn=main, args=(flags,), join=False)
+            procs.append(p)
+            # p.start()
+        else:
+            main(0, flags)
+    for proc in procs:
+        proc.join()
