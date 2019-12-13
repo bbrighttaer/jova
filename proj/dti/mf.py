@@ -210,7 +210,7 @@ def main(flags):
 
             data_key = {"ecfp4": "MF_ECFP4",
                         "ecfp8": "MF_ECFP8"}.get(cview)
-            flags['splitting_alg'] = 'no_split'
+            flags['splitting_alg'] = 'random'
             flags['cv'] = False
             flags['test'] = False
             flags['fold_num'] = 1
@@ -346,7 +346,7 @@ def get_hparam_config(flags):
 def get_hparam_file(dataset):
     return {'davis': 'bayopt_search_MF_davis_ecfp8_psc_dti_2019_11_27__13_22_48_gp_3000.csv',
             'metz': 'bayopt_search_MF_metz_ecfp8_psc_dti_2019_12_06__17_48_17_gp_3000.csv',
-            'kiba': 'bayopt_search_MF_kiba_ecfp8_psc_dti_2019_12_08__03_05_59_gp_3000.csv',
+            'kiba': 'bayopt_search_MF_kiba_ecfp8_psc_dti_2019_12_13__01_44_56_gp_3000.csv',
             }.get(dataset.lower(), None)
 
 

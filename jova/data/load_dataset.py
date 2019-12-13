@@ -9,6 +9,7 @@ import pandas as pd
 
 import jova
 import jova.splits as splits
+from jova.data.datasets import DiskDataset
 from jova.feat import GNNFeaturizer
 from jova.utils.io import save_nested_cv_dataset_to_disk, save_dataset_to_disk, load_nested_cv_dataset_from_disk, \
     load_dataset_from_disk
@@ -102,18 +103,7 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
     for transformer in transformers:
         dataset = transformer.transform(dataset)
 
-    if feat_label in ['KRLS_ECFP8', 'KRLS_ECFP4']:
-        from jova.data.data import compute_similarity_kernel_matrices
-        drug_sim_kernel_dict, prot_sim_kernel_dict = compute_similarity_kernel_matrices(dataset)
-    elif feat_label in ['SB_ECFP8', 'SB_ECFP4']:
-        from jova.data.data import compute_simboost_drug_target_features
-        simboost_drug_target_feats_dict = compute_simboost_drug_target_features(dataset, mf_simboost_data_dict)
-    elif feat_label in ['MF_ECFP8', 'MF_ECFP4']:
-        from jova.data.data import compute_MF_entities_matrix
-        MF_entities_dict = compute_MF_entities_matrix(dataset)
-
     splitters = {
-        'no_split': splits.NoSplit(),
         'index': jova.splits.IndexSplitter(),
         'random': splits.RandomSplitter(split_cold=predict_cold, cold_drug=cold_drug,
                                         cold_target=cold_target, cold_drug_cluster=cold_drug_cluster,
@@ -129,6 +119,12 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
     if test:
         kernel_data = None
         train, valid, test = splitter.train_valid_test_split(dataset, seed=seed)
+        merged_dataset = DiskDataset.merge([train, valid, test])
+        MF_entities_dict, drug_sim_kernel_dict, prot_sim_kernel_dict, \
+        simboost_drug_target_feats_dict = compute_mf_kronrls_simboost_info(
+            MF_entities_dict, merged_dataset, drug_sim_kernel_dict, feat_label, mf_simboost_data_dict,
+            prot_sim_kernel_dict,
+            simboost_drug_target_feats_dict)
 
         # process kernel / kronrls data
         if drug_sim_kernel_dict and prot_sim_kernel_dict:
@@ -143,6 +139,18 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
     elif cross_validation:
         fold_datasets = splitter.k_fold_split(dataset, K, seed=seed)
         fold_datasets = list(fold_datasets)
+
+        merged_dataset = []
+        for fold in fold_datasets:
+            merged_dataset.append(fold[0])
+            merged_dataset.append(fold[1])
+            merged_dataset.append(fold[2])
+        merged_dataset = DiskDataset.merge(merged_dataset)
+        MF_entities_dict, drug_sim_kernel_dict, prot_sim_kernel_dict, \
+        simboost_drug_target_feats_dict = compute_mf_kronrls_simboost_info(MF_entities_dict, merged_dataset,
+                                                                           drug_sim_kernel_dict, feat_label,
+                                                                           mf_simboost_data_dict, prot_sim_kernel_dict,
+                                                                           simboost_drug_target_feats_dict)
 
         # process kernel / kronrls data if simulation is in kernel mode
         if drug_sim_kernel_dict and prot_sim_kernel_dict:
@@ -165,6 +173,14 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
         # not cross validating, and not testing.
         train, valid, test = splitter.train_valid_test_split(dataset, frac_train=0.9, frac_valid=0.1,
                                                              frac_test=0, seed=seed)
+
+        merged_dataset = DiskDataset.merge([train, valid])
+        MF_entities_dict, drug_sim_kernel_dict, prot_sim_kernel_dict, \
+        simboost_drug_target_feats_dict = compute_mf_kronrls_simboost_info(MF_entities_dict, merged_dataset,
+                                                                           drug_sim_kernel_dict, feat_label,
+                                                                           mf_simboost_data_dict, prot_sim_kernel_dict,
+                                                                           simboost_drug_target_feats_dict)
+
         # process kernel / kronrls data
         if drug_sim_kernel_dict and prot_sim_kernel_dict:
             print('Constructing kernel data')
@@ -178,6 +194,20 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
 
     return tasks, all_dataset, transformers, gnn_fingerprint, \
            (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_drug_target_feats_dict, MF_entities_dict
+
+
+def compute_mf_kronrls_simboost_info(MF_entities_dict, dataset, drug_sim_kernel_dict, feat_label, mf_simboost_data_dict,
+                                     prot_sim_kernel_dict, simboost_drug_target_feats_dict):
+    if feat_label in ['KRLS_ECFP8', 'KRLS_ECFP4']:
+        from jova.data.data import compute_similarity_kernel_matrices
+        drug_sim_kernel_dict, prot_sim_kernel_dict = compute_similarity_kernel_matrices(dataset)
+    elif feat_label in ['SB_ECFP8', 'SB_ECFP4']:
+        from jova.data.data import compute_simboost_drug_target_features
+        simboost_drug_target_feats_dict = compute_simboost_drug_target_features(dataset, mf_simboost_data_dict)
+    elif feat_label in ['MF_ECFP8', 'MF_ECFP4']:
+        from jova.data.data import compute_MF_entities_matrix
+        MF_entities_dict = compute_MF_entities_matrix(dataset)
+    return MF_entities_dict, drug_sim_kernel_dict, prot_sim_kernel_dict, simboost_drug_target_feats_dict
 
 
 def _wrap_kernel_data(kernel_data):

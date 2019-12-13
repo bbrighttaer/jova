@@ -456,7 +456,7 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
     # compounds / drugs
     print('Processing drug similarity matrix')
     D = {}
-    Dgraph = None  # nx.Graph(name='drug_drug_network')
+    Dgraph = nx.Graph(name='drug_drug_network')
     for c1 in tqdm(all_comps):
         fp1 = c1.fingerprint
         for c2 in all_comps:
@@ -464,9 +464,9 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
             # Tanimoto coefficient
             score = DataStructs.TanimotoSimilarity(fp1, fp2)
             D[Pair(c1, c2)] = score
-            # Dgraph.add_nodes_from([c1, c2])
-            # if score >= sim_threshold and c1 != c2:
-            #     Dgraph.add_edge(c1, c2)
+            Dgraph.add_nodes_from([c1, c2])
+            if score >= sim_threshold and c1 != c2:
+                Dgraph.add_edge(c1, c2)
     comp_feats = compute_type2_features(compute_type1_features(Mrows, all_comps, D, nbins), D, Dgraph)
 
     # proteins / targets
@@ -474,7 +474,7 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
     aligner = Align.PairwiseAligner()
     aligner.mode = 'local'  # SW algorithm
     T = {}
-    Tgraph = None  # nx.Graph(name='target_target_network')
+    Tgraph = nx.Graph(name='target_target_network')
     for p1 in tqdm(all_prots):
         seq1 = p1.sequence[1]
         p1_score = aligner.score(seq1, seq1)
@@ -485,16 +485,18 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
             # Normalized SW score
             normalized_score = score / (sqrt(p1_score) * sqrt(p2_score))
             T[Pair(p1, p2)] = normalized_score
-            # Tgraph.add_nodes_from([p1, p2])
-            # if normalized_score >= sim_threshold and p1 != p2:
-            #     Tgraph.add_edge(p1, p2)
+            Tgraph.add_nodes_from([p1, p2])
+            if normalized_score >= sim_threshold and p1 != p2:
+                Tgraph.add_edge(p1, p2)
     prot_feats = compute_type2_features(compute_type1_features(Mcols, all_prots, T, nbins), T, Tgraph)
 
     pbar = UnboundedProgressbar()
     pbar.start()
+
+    print('Processing type 3 features')
     # Type 3 features
-    # btw_cent = nx.betweenness_centrality(Mgraph)
-    # cls_cent = nx.closeness_centrality(Mgraph)
+    btw_cent = nx.betweenness_centrality(Mgraph)
+    cls_cent = nx.closeness_centrality(Mgraph)
     # eig_cent = nx.eigenvector_centrality(Mgraph, tol=1e-3, max_iter=500)
     # pagerank = nx.pagerank(Mgraph, tol=1e-3, max_iter=1000)
     drug_target_feats_dict = defaultdict(lambda: list())
@@ -505,8 +507,6 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
     prot_mat = mf_simboost_data_dict['prot_mat']
     comp_index = mf_simboost_data_dict['comp_index']
     prot_index = mf_simboost_data_dict['prot_index']
-
-    print('Processing type 3 features')
     for pair in tqdm(pair_to_value_y):
         comp, prot = pair.p1, pair.p2
         feat = drug_target_feats_dict[Pair(comp, prot)]
@@ -535,10 +535,10 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
             feat.append(np.mean(t_av_lst))
 
         # d.t.bt, d.t.cl, d.t.ev
-        # feat.append(btw_cent[comp])
-        # feat.append(btw_cent[prot])
-        # feat.append(cls_cent[comp])
-        # feat.append(cls_cent[prot])
+        feat.append(btw_cent[comp])
+        feat.append(btw_cent[prot])
+        feat.append(cls_cent[comp])
+        feat.append(cls_cent[prot])
         # feat.append(eig_cent[comp])
         # feat.append(eig_cent[prot])
 
@@ -602,40 +602,40 @@ def compute_type2_features(type1_feats_dict, Edict, Egraph):
     :return:
         A dict of entity-feature elements
     """
-    # feats_dict = defaultdict(lambda: list())
-    # # btw_cent = nx.betweenness_centrality(Egraph)
-    # # cls_cent = nx.closeness_centrality(Egraph)
-    # # eig_cent = nx.eigenvector_centrality(Egraph, tol=1e-5, max_iter=200)
-    # # pagerank = nx.pagerank(Egraph)
-    # for node in Egraph.nodes():
-    #     feat = feats_dict[node]
-    #
-    #     # num.nb
-    #     neighbors = list(Egraph.neighbors(node))
-    #     feat.append(len(neighbors))
-    #
-    #     # k.sim
-    #     neighbors_sim_score = [Edict[Pair(node, neighbor)] for neighbor in neighbors]
-    #     feat.extend(neighbors_sim_score)
-    #
-    #     if len(neighbors) > 0:
-    #         # k.ave.feat
-    #         neighs_t1_feat = np.array([type1_feats_dict[neighbor] for neighbor in neighbors])
-    #         avg_neighs_t1_feat = np.mean(neighs_t1_feat, axis=1)
-    #         feat.extend(avg_neighs_t1_feat.tolist())
-    #
-    #         # k.w.ave.feat
-    #         w_ave_feat = np.array(neighbors_sim_score) * avg_neighs_t1_feat
-    #         feat.extend(w_ave_feat.tolist())
+    feats_dict = defaultdict(lambda: list())
+    btw_cent = nx.betweenness_centrality(Egraph)
+    cls_cent = nx.closeness_centrality(Egraph)
+    eig_cent = nx.eigenvector_centrality(Egraph, tol=1e-5, max_iter=200)
+    pagerank = nx.pagerank(Egraph)
+    for node in Egraph.nodes():
+        feat = feats_dict[node]
+
+        # num.nb
+        neighbors = list(Egraph.neighbors(node))
+        feat.append(len(neighbors))
+
+        # k.sim
+        neighbors_sim_score = [Edict[Pair(node, neighbor)] for neighbor in neighbors]
+        feat.extend(neighbors_sim_score)
+
+        if len(neighbors) > 0:
+            # k.ave.feat
+            neighs_t1_feat = np.array([type1_feats_dict[neighbor] for neighbor in neighbors])
+            avg_neighs_t1_feat = np.mean(neighs_t1_feat, axis=1)
+            feat.extend(avg_neighs_t1_feat.tolist())
+
+            # k.w.ave.feat
+            w_ave_feat = np.array(neighbors_sim_score) * avg_neighs_t1_feat
+            feat.extend(w_ave_feat.tolist())
 
     # bt, cl, ev
-    # feat.append(btw_cent[node])
-    # feat.append(cls_cent[node])
-    # feat.append(eig_cent[node])
+    feat.append(btw_cent[node])
+    feat.append(cls_cent[node])
+    feat.append(eig_cent[node])
 
     # pr
-    # feat.append(pagerank[node])
-    return type1_feats_dict  # feats_dict
+    feat.append(pagerank[node])
+    return feats_dict
 
 
 class Pair(object):
