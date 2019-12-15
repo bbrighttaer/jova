@@ -470,7 +470,7 @@ def save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerp
         pickle.dump(transformers, f)
     if gnn_fingerprint is not None:
         with open(os.path.join(save_dir, "gnn_fingerprint_dict.pkl"), "wb") as f:
-            pickle.dump(gnn_fingerprint, f)
+            pickle.dump(dict(gnn_fingerprint), f)
     if drug_kernel_dict is not None:
         with open(os.path.join(save_dir, "drug_drug_kernel_dict.pkl"), "wb") as f:
             pickle.dump(dict(drug_kernel_dict), f)

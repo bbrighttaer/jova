@@ -42,6 +42,10 @@ def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
         source = 'kiba'
     elif re.search('toxcast', prot_desc_path, re.I):
         source = 'toxcast'
+    elif re.search('human', prot_desc_path, re.I):
+        source = 'human'
+    elif re.search('celegans', prot_desc_path, re.I):
+        source = 'celegans'
 
     df = pd.read_csv(prot_desc_path, index_col=0)
     # protList = list(df.index)
@@ -367,7 +371,7 @@ def get_data(featurizer, flags, prot_sequences, seed, mf_simboost_data_dict=None
                              cold_target=flags['cold_target'],
                              cold_drug_cluster=flags['cold_drug_cluster'],
                              split_warm=flags['split_warm'],
-                             mode='regression',
+                             mode='regression' if not flags['mode'] else flags['mode'],
                              seed=seed,
                              filter_threshold=flags["filter_threshold"],
                              mf_simboost_data_dict=mf_simboost_data_dict)
