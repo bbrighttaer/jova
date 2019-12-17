@@ -54,7 +54,7 @@ seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 joint_attention_data = MultimodalAttentionData()
 
@@ -378,7 +378,7 @@ class Jova(Trainer):
 
         try:
             # Main training loop
-            tb_idx = Count()
+            tb_idx = {'train': Count(), 'val': Count(), 'test': Count()}
             for epoch in range(n_epochs):
                 if terminate_training:
                     print("Terminating training...")
@@ -473,10 +473,10 @@ class Jova(Trainer):
                                                       transformers_dict[list(Xs.keys())[0]])
 
                                 # TBoard info
-                                tracker.track("%s/loss" % phase, loss.item(), tb_idx.IncAndGet())
-                                tracker.track("%s/score" % phase, score, tb_idx.i)
+                                tracker.track("%s/loss" % phase, loss.item(), tb_idx[phase].IncAndGet())
+                                tracker.track("%s/score" % phase, score, tb_idx[phase].i)
                                 for k in eval_dict:
-                                    tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx.i)
+                                    tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx[phase].i)
 
                                 if phase == "train":
                                     # backward pass
@@ -645,7 +645,7 @@ class Jova(Trainer):
     def explain_model(model, model_dir, model_name, data_loaders, transformers_dict, prot_desc_dict, prot_model_types,
                       sim_data_node, max_print=10, k=10):
         # load saved model and put in evaluation mode
-        model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc=torch.device("cuda:2")))
+        model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc=torch.device("cuda:0")))
         model.eval()
 
         print("Model explanation...")
@@ -895,6 +895,7 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
         if not exists:
             raise FileNotFoundError(f'{hfile} not found')
         hyper_params = parse_hparams(hfile)
+        hyper_params['explain_mode'] = flags.explain
     except:
         hyper_params = default_hparams_bopt(flags)
 

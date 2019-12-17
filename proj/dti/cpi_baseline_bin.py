@@ -22,8 +22,10 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim.lr_scheduler as sch
+from jova.utils.tb import TBMeanTracker
 from soek import *
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import jova.utils.io
@@ -36,7 +38,7 @@ from jova.trans import undo_transforms
 from jova.utils import Trainer
 from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
 from jova.utils.io import save_model, load_model, load_pickle
-from jova.utils.math import ExpAverage
+from jova.utils.math import ExpAverage, Count
 from jova.utils.train_helpers import count_parameters, FrozenModels
 
 currentDT = dt.now()
@@ -213,7 +215,7 @@ class CPIBaseline(Trainer):
         optimizer = optimizer(model.parameters(), **optim_kwargs)
 
         # metrics
-        metrics = [mt.accuracy_score, mt.roc_auc_score, mt.recall_score, mt.f1_score]
+        metrics = [mt.accuracy_score, mt.roc_auc_score, mt.recall_score, mt.f1_score, mt.precision_score]
         return model, optimizer, {"train": train_data_loader,
                                   "val": val_data_loader,
                                   "test": test_data_loader}, metrics, frozen_models
@@ -259,6 +261,7 @@ class CPIBaseline(Trainer):
     @staticmethod
     def train(model, optimizer, data_loaders, metrics, frozen_models, transformers_dict, prot_desc_dict, tasks,
               view_lbl, n_iters=5000, sim_data_node=None, epoch_ckpt=(2, 1.0), tb_writer=None, is_hsearch=False):
+        tb_writer = tb_writer()
         start = time.time()
         best_model_wts = model.state_dict()
         best_score = -10000
@@ -284,6 +287,7 @@ class CPIBaseline(Trainer):
             sim_data_node.data = [train_loss_node, metrics_node, scores_node]
         try:
             # Main training loop
+            tb_idx = {'train': Count(), 'val': Count(), 'test': Count()}
             for epoch in range(n_epochs):
                 if terminate_training:
                     print("Terminating training...")
@@ -308,52 +312,64 @@ class CPIBaseline(Trainer):
 
                     # Iterate through mini-batches
                     i = 0
-                    for batch in tqdm(data_loaders[phase]):
-                        batch_size, data = batch_collator(batch, prot_desc_dict, spec=view_lbl, cuda_prot=False)
-                        # print(batch[0][0][0][0].smiles)
-                        # print(batch[0][0][0][1].sequence)
+                    with TBMeanTracker(tb_writer, 3) as tracker:
+                        for batch in tqdm(data_loaders[phase]):
+                            batch_size, data = batch_collator(batch, prot_desc_dict, spec=view_lbl, cuda_prot=False)
+                            # print(batch[0][0][0][0].smiles)
+                            # print(batch[0][0][0][1].sequence)
 
-                        # Data
-                        protein_x = data[view_lbl][0][2]
-                        if view_lbl == "gconv":
-                            # graph data structure is: [(compound data, batch_size), protein_data]
-                            X = ((data[view_lbl][0][0], batch_size), protein_x)
-                        else:
-                            X = (data[view_lbl][0][0], protein_x)
-                        y = np.array([k for k in data[view_lbl][1]], dtype=np.float)
-                        w = np.array([k for k in data[view_lbl][2]], dtype=np.float)
+                            # Data
+                            protein_x = data[view_lbl][0][2]
+                            if view_lbl == "gconv":
+                                # graph data structure is: [(compound data, batch_size), protein_data]
+                                X = ((data[view_lbl][0][0], batch_size), protein_x)
+                            else:
+                                X = (data[view_lbl][0][0], protein_x)
+                            y = np.array([k for k in data[view_lbl][1]], dtype=np.float)
+                            w = np.array([k for k in data[view_lbl][2]], dtype=np.float)
 
-                        optimizer.zero_grad()
+                            optimizer.zero_grad()
 
-                        # forward propagation
-                        # track history if only in train
-                        with torch.set_grad_enabled(phase == "train"):
-                            outputs = model(X)
-                            target = torch.from_numpy(y).long().reshape(-1, )
-                            weights = torch.from_numpy(w).float().reshape(-1, )
-                            if cuda:
-                                target = target.cuda()
-                                weights = weights.cuda()
-                            # loss = criterion(outputs, target)
-                            loss = F.cross_entropy(outputs, target)  # , weight=weights)
+                            # forward propagation
+                            # track history if only in train
+                            with torch.set_grad_enabled(phase == "train"):
+                                outputs = model(X)
+                                target = torch.from_numpy(y).long().reshape(-1, )
+                                weights = torch.from_numpy(w).float().reshape(-1, )
+                                if cuda:
+                                    target = target.cuda()
+                                    weights = weights.cuda()
+                                # loss = criterion(outputs, target)
+                                loss = F.cross_entropy(outputs, target)  # , weight=weights)
 
-                        if phase == "train":
-                            print("\tEpoch={}/{}, batch={}/{}, loss={:.4f}".format(epoch + 1, n_epochs, i + 1,
-                                                                                   len(data_loaders[phase]),
-                                                                                   loss.item()))
-                            # for epoch stats
-                            epoch_losses.append(loss.item())
+                            if str(loss.item()) == "nan":
+                                terminate_training = True
+                                break
 
-                            # for sim data resource
-                            loss_lst.append(loss.item())
+                            # metrics
+                            eval_dict = {}
+                            score = CPIBaseline.evaluate(eval_dict, y, outputs, w, metrics)
 
-                            # optimization ops
-                            loss.backward()
-                            optimizer.step()
-                        else:
-                            if str(loss.item()) != "nan":  # useful in hyperparameter search
-                                eval_dict = {}
-                                score = CPIBaseline.evaluate(eval_dict, y, outputs, w, metrics)
+                            # TBoard info
+                            tracker.track(f"{phase}/loss", loss.item(), tb_idx[phase].IncAndGet())
+                            tracker.track(f"{phase}/score", score, tb_idx[phase].i)
+                            for k in eval_dict:
+                                tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx[phase].i)
+
+                            if phase == "train":
+                                print("\tEpoch={}/{}, batch={}/{}, loss={:.4f}".format(epoch + 1, n_epochs, i + 1,
+                                                                                       len(data_loaders[phase]),
+                                                                                       loss.item()))
+                                # for epoch stats
+                                epoch_losses.append(loss.item())
+
+                                # for sim data resource
+                                loss_lst.append(loss.item())
+
+                                # optimization ops
+                                loss.backward()
+                                optimizer.step()
+                            else:
                                 # for epoch stats
                                 epoch_scores.append(score)
 
@@ -369,11 +385,8 @@ class CPIBaseline(Trainer):
                                       "evaluation results= {}, score={}".format(epoch + 1, n_epochs, i + 1,
                                                                                 len(data_loaders[phase]),
                                                                                 eval_dict, score))
-                            else:
-                                terminate_training = True
-
-                        i += 1
-                        data_size += batch_size
+                            i += 1
+                            data_size += batch_size
                     # End of mini=batch iterations.
 
                     if phase == "train":
@@ -509,6 +522,9 @@ def main(pid, flags):
         hparam_search = None
 
         for seed in seeds:
+            summary_writer_creator = lambda: SummaryWriter(
+                log_dir="tb_cpi_bin/{}_{}_{}/".format(sim_label, seed, dt.now().strftime("%Y_%m_%d__%H_%M_%S")))
+
             # for data collection of this round of simulation.
             data_node = DataNode(label="seed_%d" % seed)
             nodes_list.append(data_node)
@@ -561,14 +577,15 @@ def main(pid, flags):
                                     "tasks": tasks,
                                     "n_iters": 3000,
                                     "is_hsearch": True,
-                                    "view_lbl": view}
+                                    "view_lbl": view,
+                                    "tb_writer": summary_writer_creator}
 
                 hparams_conf = get_hparam_config(flags, view)
                 if hparam_search is None:
                     search_alg = {"random_search": RandomSearchCV,
                                   "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
                                                                             BayesianOptSearchCV)
-                    min_opt = "gp"
+                    min_opt = "gbrt"
                     hparam_search = search_alg(hparam_config=hparams_conf,
                                                num_folds=k,
                                                initializer=trainer.initialize,
@@ -592,14 +609,14 @@ def main(pid, flags):
                 print("Best params = {}".format(stats.best()))
             else:
                 invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node,
-                             view, prot_profile)
+                             view, prot_profile, summary_writer_creator)
 
         # save simulation data resource tree to file.
         sim_data.to_json(path="./analysis/")
 
 
-def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view,
-                 prot_profile):
+def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_dict, data_node, view, prot_profile,
+                 tb_writer_creator):
     hyper_params = default_hparams_bopt(flags, view)
     # Initialize the model and other related entities for training.
     if flags["cv"]:
@@ -610,14 +627,14 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             k_node = DataNode(label="fold-%d" % k)
             folds_data.append(k_node)
             start_fold(k_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                       transformers_dict, view, prot_profile, k)
+                       transformers_dict, view, prot_profile, tb_writer_creator, k)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                   transformers_dict, view, prot_profile)
+                   transformers_dict, view, prot_profile, tb_writer_creator)
 
 
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-               transformers_dict, view, prot_profile, k=None):
+               transformers_dict, view, prot_profile, tb_writer_creator, k=None):
     data = trainer.data_provider(k, flags, data_dict)
     model, optimizer, data_loaders, metrics, frozen_models = trainer.initialize(hparams=hyper_params,
                                                                                 train_dataset=data["train"],
@@ -632,7 +649,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, frozen_models,
                                 transformers_dict, prot_desc_dict, tasks, n_iters=10000, view_lbl=view,
-                                sim_data_node=sim_data_node)
+                                sim_data_node=sim_data_node, tb_writer=tb_writer_creator)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
         split_label = flags.split
@@ -685,19 +702,19 @@ def default_hparams_bopt(flags, view):
         "kaiming_constant": 5,
 
         # dropout regs
-        "dprob": 0.,
+        "dprob": 0.1,
 
-        "tr_batch_size": 1,
+        "tr_batch_size": 128,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
-        "optimizer": "adam",
-        "optimizer__global__weight_decay": 1e-7,
-        "optimizer__global__lr": 0.0001,
+        "optimizer": "adagrad",
+        "optimizer__global__weight_decay": 0.00021069414587488158,
+        "optimizer__global__lr": 1.0,
 
         "prot": {
-            "dim": 128,
+            "dim": 50,
             "vocab_size": flags["prot_vocab_size"],
             "window": 11,
             "prot_cnn_num_layers": 1
@@ -716,7 +733,7 @@ def default_hparams_bopt(flags, view):
         "gnn": {
             "fingerprint_size": len(flags["gnn_fingerprint"]),
             "num_layers": 1,
-            "dim": 20,
+            "dim": 50,
         }
     }
 

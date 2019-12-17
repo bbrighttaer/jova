@@ -121,6 +121,6 @@ if __name__ == '__main__':
             protein_profile = create_protein_profile(word_dict, words, args.window)
             proteins[label] = protein_profile
     print("Saving files...")
-    dump_binary(proteins, '../../data/human_data/proteins.profile', dict)
-    dump_binary(word_dict, '../../data/human_data/proteins.vocab', dict)
+    dump_binary(proteins, '../../data/celegans_data/proteins.profile', dict)
+    dump_binary(word_dict, '../../data/celegans_data/proteins.vocab', dict)
     print("Info: vocab size={}, protein profiles saved={}".format(len(word_dict), len(proteins)))

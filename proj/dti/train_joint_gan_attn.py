@@ -416,7 +416,7 @@ class JovaGAN(Trainer):
 
         try:
             # Main training loop
-            tb_idx = Count()
+            tb_idx = {'train': Count(), 'val': Count(), 'test': Count()}
             for epoch in range(n_epochs):
                 if terminate_training:
                     print("Terminating training...")
@@ -512,10 +512,10 @@ class JovaGAN(Trainer):
                                 score = JovaGAN.evaluate(eval_dict, y, outputs, w, metrics, tasks,
                                                          transformers_dict[list(Xs.keys())[0]])
                                 # TBoard info
-                                tracker.track("%s/loss" % phase, pred_loss.item(), tb_idx.IncAndGet())
-                                tracker.track("%s/score" % phase, score, tb_idx.i)
+                                tracker.track("%s/loss" % phase, pred_loss.item(), tb_idx[phase].IncAndGet())
+                                tracker.track("%s/score" % phase, score, tb_idx[phase].i)
                                 for k in eval_dict:
-                                    tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx.i)
+                                    tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx[phase].i)
 
                                 if phase == "train":
                                     # GAN stuff
@@ -528,8 +528,8 @@ class JovaGAN(Trainer):
                                     gen_loss = adversarial_loss(discriminator(predicted_diffs), valid)
                                     gen_loss_lst.append(gen_loss.item())
                                     loss = pred_loss + weighted_loss * gen_loss
-                                    tracker.track("gan/gen_loss", gen_loss.item(), tb_idx.i)
-                                    tracker.track("train/comp_loss", loss.item(), tb_idx.i)
+                                    tracker.track("gan/gen_loss", gen_loss.item(), tb_idx[phase].i)
+                                    tracker.track("train/comp_loss", loss.item(), tb_idx[phase].i)
                                     loss.backward()
                                     optimizer_gen.step()
 
@@ -537,7 +537,7 @@ class JovaGAN(Trainer):
                                     true_loss = adversarial_loss(discriminator(real_diffs), valid)
                                     fake_loss = adversarial_loss(discriminator(predicted_diffs.detach()), fake)
                                     discriminator_loss = (true_loss + fake_loss) / 2.
-                                    tracker.track("gan/disc_loss", discriminator_loss.item(), tb_idx.i)
+                                    tracker.track("gan/disc_loss", discriminator_loss.item(), tb_idx[phase].i)
                                     dis_loss_lst.append(discriminator_loss.item())
                                     discriminator_loss.backward()
                                     optimizer_disc.step()

@@ -321,7 +321,7 @@ class SingleViewDTI(Trainer):
             sim_data_node.data = [train_loss_node, metrics_node, scores_node]
         try:
             # Main training loop
-            tb_idx = Count()
+            tb_idx = {'train': Count(), 'val': Count(), 'test': Count()}
             for epoch in range(n_epochs):
                 if terminate_training:
                     print("Terminating training...")
@@ -384,10 +384,10 @@ class SingleViewDTI(Trainer):
                                                            transformers_dict[comp_view])
 
                             # TBoard info
-                            tracker.track("%s/loss" % phase, loss.item(), tb_idx.IncAndGet())
-                            tracker.track("%s/score" % phase, score, tb_idx.i)
+                            tracker.track("%s/loss" % phase, loss.item(), tb_idx[phase].IncAndGet())
+                            tracker.track("%s/score" % phase, score, tb_idx[phase].i)
                             for k in eval_dict:
-                                tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx.i)
+                                tracker.track('{}/{}'.format(phase, k), eval_dict[k], tb_idx[phase].i)
 
                             if phase == "train":
                                 print("\tEpoch={}/{}, batch={}/{}, loss={:.4f}".format(epoch + 1, n_epochs, i + 1,
