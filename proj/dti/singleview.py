@@ -47,7 +47,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
 seeds = [1, 8, 64]
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 
 
 def create_prot_net(hparams, protein_profile):
@@ -666,6 +666,8 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
         if not exists:
             raise FileNotFoundError(f'{hfile} not found')
         hyper_params = parse_hparams(hfile)
+        hyper_params['gnn']['fingerprint_size'] = len(flags["gnn_fingerprint"]) \
+            if flags["gnn_fingerprint"] is not None else 0
     except:
         hyper_params = default_hparams_bopt(flags, *view)
 
