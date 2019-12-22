@@ -50,7 +50,7 @@ seeds = [128, 256, 512]
 
 check_data = False
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 
 def create_integrated_net(hparams):
@@ -95,7 +95,7 @@ def create_integrated_net(hparams):
                        dropout=hparams["dprob"])
         fcn_args.append(conf)
         p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1))
+    fcn_args.append(FcnArgs(in_features=p, out_features=hparams['output_dim']))
     fcn_layers = create_fcn_layers(fcn_args)
     model = nn.Sequential(civ_net, *fcn_layers)
     return model
@@ -510,6 +510,9 @@ def main(pid, flags):
         transformers_dict["ecfp8"] = data_dict["ecfp8"][2]
 
         tasks = data_dict["gconv"][0]
+        # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
+        flags["tasks"] = tasks
+
 
         trainer = IntegratedViewDTI()
 
@@ -651,6 +654,7 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
+        'output_dim': len(flags['tasks']),
         "prot_dim": 8421,
         "fp_dim": 1024,
         "gconv_dim": 256,
@@ -676,6 +680,7 @@ def default_hparams_bopt(flags):
 
 def get_hparam_config(flags):
     return {
+        'output_dim': ConstantParam(len(flags['tasks'])),
         "prot_dim": ConstantParam(8421),
         "fp_dim": ConstantParam(1024),
         "gconv_dim": CategoricalParam(choices=[128, 256, 512]),

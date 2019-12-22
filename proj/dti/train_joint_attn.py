@@ -49,8 +49,8 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [1, 8, 64]
-# seeds = [7, 491]  # [100, 7, 491]
-seeds = [123, 124, 125]
+seeds = [100, 7, 491]
+# seeds = [123, 124, 125]
 
 check_data = False
 

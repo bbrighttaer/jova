@@ -20,6 +20,7 @@ import numpy as np
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim.lr_scheduler as sch
 from soek import *
 from torch.utils.data import DataLoader
@@ -47,7 +48,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
 seeds = [1, 8, 64]
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 
 def create_prot_net(hparams, protein_profile):
@@ -372,6 +373,7 @@ class SingleViewDTI(Trainer):
                                     target = target.cuda()
                                     weights = weights.cuda()
                                 outputs = outputs * weights
+                                target = target * weights
                                 loss = criterion(outputs, target)
 
                             if str(loss.item()) == "nan":
@@ -438,7 +440,7 @@ class SingleViewDTI(Trainer):
                             best_score = mean_score
                             best_model_wts = copy.deepcopy(model.state_dict())
                             best_epoch = epoch
-        except RuntimeError as e:
+        except Exception as e:
             print(str(e))
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
@@ -668,6 +670,7 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
         hyper_params = parse_hparams(hfile)
         hyper_params['gnn']['fingerprint_size'] = len(flags["gnn_fingerprint"]) \
             if flags["gnn_fingerprint"] is not None else 0
+        hyper_params['output_dim'] = len(tasks)
     except:
         hyper_params = default_hparams_bopt(flags, *view)
 

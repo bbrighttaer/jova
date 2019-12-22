@@ -355,28 +355,28 @@ def cuda(tensor):
 def get_data(featurizer, flags, prot_sequences, seed, mf_simboost_data_dict=None):
     # logger = get_logger(name="Data loader")
     print("--------------About to load {}-{} data-------------".format(featurizer, flags['dataset_name']))
-    try:
-        return load_dti_data(featurizer=featurizer,
-                             dataset_name=flags['dataset_name'],
-                             dataset_file=flags['dataset_file'],
-                             prot_seq_dict=prot_sequences,
-                             input_protein=True,
-                             cross_validation=flags['cv'],
-                             test=flags['test'],
-                             fold_num=flags['fold_num'],
-                             split=flags['splitting_alg'],
-                             reload=flags['reload'],
-                             predict_cold=flags['predict_cold'],
-                             cold_drug=flags['cold_drug'],
-                             cold_target=flags['cold_target'],
-                             cold_drug_cluster=flags['cold_drug_cluster'],
-                             split_warm=flags['split_warm'],
-                             mode='regression' if not hasattr(flags, 'mode') else flags['mode'],
-                             seed=seed,
-                             filter_threshold=flags["filter_threshold"],
-                             mf_simboost_data_dict=mf_simboost_data_dict)
-    finally:
-        print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset_name']))
+    data = load_dti_data(featurizer=featurizer,
+                         dataset_name=flags['dataset_name'],
+                         dataset_file=flags['dataset_file'],
+                         prot_seq_dict=prot_sequences,
+                         input_protein=True,
+                         cross_validation=flags['cv'],
+                         test=flags['test'],
+                         fold_num=flags['fold_num'],
+                         split=flags['splitting_alg'],
+                         reload=flags['reload'],
+                         predict_cold=flags['predict_cold'],
+                         cold_drug=flags['cold_drug'],
+                         cold_target=flags['cold_target'],
+                         cold_drug_cluster=flags['cold_drug_cluster'],
+                         split_warm=flags['split_warm'],
+                         mode='regression' if not hasattr(flags, 'mode') else flags['mode'],
+                         seed=seed,
+                         filter_threshold=flags["filter_threshold"],
+                         mf_simboost_data_dict=mf_simboost_data_dict)
+    print("--------------{}-{} data loaded-------------".format(featurizer, flags['dataset_name']))
+    return data
+
 
 
 def compute_similarity_kernel_matrices(dataset):

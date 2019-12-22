@@ -114,7 +114,7 @@ def create_discriminator_net(hparams):
                        dropout=hparams["dprob"])
         fcn_args.append(conf)
         p = dim
-    fcn_args.append(FcnArgs(in_features=p, out_features=1, activation="sigmoid"))
+    fcn_args.append(FcnArgs(in_features=p, out_features=hparams['output_dim'], activation="sigmoid"))
     layers = create_fcn_layers(fcn_args)
     model = nn.Sequential(*layers)
     return model
@@ -588,6 +588,7 @@ def main(pid, flags):
         transformers_dict["ecfp8"] = data_dict["ecfp8"][2]
 
         tasks = data_dict["gconv"][0]
+        flags['tasks'] = tasks
 
         trainer = IVPGAN()
 
@@ -731,6 +732,7 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
+        'output_dim': len(flags['tasks']),
         "prot_dim": 8421,
         "fp_dim": 1024,
         "gconv_dim": 512,

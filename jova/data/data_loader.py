@@ -301,6 +301,7 @@ class CSVLoader(DataLoader):
         if self.input_protein:
             proteins = featurize_protein(shard, field=self.protein_field, source_field=self.source_field,
                                          prot_seq_dict=self.prot_seq_dict)
+            proteins = proteins[valid_inds]
             # Note: for ECFP with 1024 entries, mol_features is a (8192, 1024) sized array.
             return np.concatenate((mol_features, proteins), axis=1), valid_inds
         else:

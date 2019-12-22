@@ -30,15 +30,15 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
     # for SimBoost, Kron-RLS and other kernel-based methods
     simboost_drug_target_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
 
+    dataset_file = os.path.join(data_dir, file_name)
+    headers = list(pd.read_csv(dataset_file, header=0, index_col=False, nrows=0))
     if input_protein:
         t_suffix = ''
         if mode == 'classification':
             t_suffix = '_bin'
-        # headers = list(pd.read_csv(os.path.join(data_dir, file_name), header=0, nrows=0))
-        tasks = [dataset_name + t_suffix]
+        tasks = headers[:-3]
+        tasks = [task + t_suffix for task in tasks]
     else:
-        dataset_file = os.path.join(data_dir, file_name)
-        headers = list(pd.read_csv(dataset_file, header=0, index_col=False, nrows=0))
         tasks = headers[:-1]
 
     if reload:

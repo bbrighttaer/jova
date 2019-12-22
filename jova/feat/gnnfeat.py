@@ -131,12 +131,15 @@ class GNNFeaturizer(Featurizer):
         :param smiles:
         :return:
         """
-        mol = Chem.AddHs(mol)  # Consider hydrogens.
-        atoms = create_atoms(self, mol)
-        i_jbond_dict = create_ijbonddict(self, mol)
-        fingerprints = extract_fingerprints(self, atoms, i_jbond_dict, self.radius)
-        adjacency = create_adjacency(mol)
-        return GnnMol(mol, fingerprints, adjacency, smiles)
+        if smiles is not None and '.' not in smiles.strip() and mol.GetNumAtoms() > 1:
+            mol = Chem.AddHs(mol)  # Consider hydrogens.
+            atoms = create_atoms(self, mol)
+            i_jbond_dict = create_ijbonddict(self, mol)
+            fingerprints = extract_fingerprints(self, atoms, i_jbond_dict, self.radius)
+            adjacency = create_adjacency(mol)
+            return GnnMol(mol, fingerprints, adjacency, smiles)
+        else:
+            return np.array([])
 
     def save_featurization_info(self, save_dir):
         """
