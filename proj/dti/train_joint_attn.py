@@ -49,12 +49,13 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [1, 8, 64]
-seeds = [100, 7, 491]
+# seeds = [10, 20, 30]
+seeds = [11, 21, 31]
 # seeds = [123, 124, 125]
 
 check_data = False
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(3)
 
 joint_attention_data = MultimodalAttentionData()
 

@@ -9,11 +9,33 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import csv
 import json
 import os
-import csv
 
 from tqdm import tqdm
+
+aac_one_to_three_dict = {'A': 'Ala',  # Alanine
+                         'R': 'Arg',  # Arginine
+                         'N': 'Asn',  # Asparagine
+                         'D': 'Asp',  # Aspartic Acid
+                         'C': 'Cys',  # Cysteine
+                         'E': 'Glu',  # Glutamic Acid
+                         'Q': 'Gln',  # Glutamine
+                         'G': 'Gly',  # Glycine
+                         'H': 'His',  # Histidine
+                         'I': 'Ile',  # Isoleucine
+                         'L': 'Leu',  # Leucine
+                         'K': 'Lys',  # Lysine
+                         'M': 'Met',  # Methionine
+                         'F': 'Phe',  # Phenylalanine
+                         'P': 'Pro',  # Proline
+                         'S': 'Ser',  # Serine
+                         'T': 'Thr',  # Threonine
+                         'W': 'Trp',  # Tryptophan
+                         'Y': 'Tyr',  # Tyrosine
+                         'V': 'Val'  # Valine
+                         }
 
 
 def get_resources(root, queries):
@@ -76,7 +98,7 @@ def retrieve_resource_cv(k, seeds, r_name, r_data, res_names):
 
 if __name__ == '__main__':
     folder = "analysis"
-    qualifier = "davis_integrated_view_attn_no_gan_rnn_psc_ecfp8_gconv_warm_explain_2019_12_17__12_04_47"
+    qualifier = "davis_integrated_view_attn_no_gan_rnn_psc_ecfp8_gconv_warm_explain_2019_12_30__22_31_14"
     files = list(filter(lambda f: qualifier in f and '.json' in f, os.listdir(folder)))
     print('Number of files loaded=', len(files))
     files.sort()
@@ -93,7 +115,7 @@ if __name__ == '__main__':
                                              ("attn_ranking", 0),
                                          ])
         attention_data = data_dict['attn_ranking']
-        with open(os.path.join(results_folder, root_name+'.csv'), 'a') as f:
+        with open(os.path.join(results_folder, root_name + '.csv'), 'a') as f:
             writer = csv.DictWriter(f, None)
             for i in range(len(attention_data)):
                 attn_dt = attention_data[i]
@@ -117,21 +139,32 @@ if __name__ == '__main__':
                                 csv_row['dataset'] = dataset
                             csv_row[f'entity{v + 1}'] = entity
                             top_segments = sample['rankings']
+                            top_residues = None
                             if 'sequence' in sample:
                                 sequence = sample['sequence']
                                 csv_row['sequence'] = sequence
                                 # since it is a protein lets expand the grouped segments (windows)
                                 _tps = []
+                                _tps_res = []
                                 for window in top_segments:
                                     seg = ''
+                                    seg_res = ''
                                     for m, trigram in enumerate(window):
-                                        if m == 0:
-                                            seg += trigram
-                                        else:
-                                            seg += trigram[-1]  # since they overlap
+                                        if trigram != '<UNK>':
+                                            if m == 0:
+                                                seg += trigram
+                                            else:
+                                                seg += trigram[-1]  # since they overlap
+                                    offset = sequence.index(seg)
+                                    for r, res in enumerate(seg):
+                                        seg_res += aac_one_to_three_dict[res] + str(offset + r + 1) + ' '
                                     _tps.append(seg)
+                                    _tps_res.append(seg_res.strip())
                                 top_segments = _tps
+                                top_residues = _tps_res
                             csv_row[f'top_segments{v + 1}'] = top_segments
+                            if top_residues:
+                                csv_row['top_residues'] = top_residues
                     if writer.fieldnames is None:
                         writer.fieldnames = list(csv_row.keys())
                         writer.writeheader()

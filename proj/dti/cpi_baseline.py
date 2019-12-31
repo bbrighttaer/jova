@@ -46,7 +46,7 @@ seeds = [1, 8, 64]
 # seeds = [100, 200, 300]
 # seeds = [123, 124, 125]
 
-torch.cuda.set_device(3)
+torch.cuda.set_device(1)
 
 
 def create_ecfp_net(hparams):

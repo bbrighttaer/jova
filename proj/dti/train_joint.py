@@ -50,7 +50,7 @@ seeds = [128, 256, 512]
 
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 
 def create_integrated_net(hparams):

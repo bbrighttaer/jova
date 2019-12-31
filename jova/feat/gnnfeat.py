@@ -131,15 +131,21 @@ class GNNFeaturizer(Featurizer):
         :param smiles:
         :return:
         """
-        if smiles is not None and '.' not in smiles.strip() and mol.GetNumAtoms() > 1:
-            mol = Chem.AddHs(mol)  # Consider hydrogens.
-            atoms = create_atoms(self, mol)
-            i_jbond_dict = create_ijbonddict(self, mol)
+        mol = Chem.AddHs(mol)  # Consider hydrogens.
+        # Process each fragment in the compound separately and join the fingerprints of all fragments to form the
+        # fingerprint of the compound/molecule.
+        # We think this provides a better handling of SMILES with '.' in them (Disconnected structures)
+        # The original codes of the aforecited paper removes all such samples.
+        fragments = Chem.GetMolFrags(mol, asMols=True)
+        frag_fingerprints = []
+        for frag_mol in fragments:
+            atoms = create_atoms(self, frag_mol)
+            i_jbond_dict = create_ijbonddict(self, frag_mol)
             fingerprints = extract_fingerprints(self, atoms, i_jbond_dict, self.radius)
-            adjacency = create_adjacency(mol)
-            return GnnMol(mol, fingerprints, adjacency, smiles)
-        else:
-            return np.array([])
+            frag_fingerprints.append(fingerprints)
+        fingerprints = np.concatenate(frag_fingerprints)
+        adjacency = create_adjacency(mol)
+        return GnnMol(mol, fingerprints, adjacency, smiles)
 
     def save_featurization_info(self, save_dir):
         """
@@ -151,3 +157,11 @@ class GNNFeaturizer(Featurizer):
         os.makedirs(save_dir, exist_ok=True)
         with open(os.path.join(save_dir, 'fingerprint_dict.pickle'), 'wb') as f:
             pickle.dump(dict(self.fingerprint_dict), f)
+
+# if __name__ == '__main__':
+#     #smiles_str = 'CC(C)(C)OC(=O)N1CCC(CC1)n2ncc3c(nc(nc23)c4ccc(N)cc4)N5CCOCC5'
+#     smiles_str = '[Na+].O\\N=C/1\\C(=C/2\\C(=O)Nc3ccc(cc23)S(=O)(=O)[O-])\\Nc4ccccc14'
+#     mol = Chem.MolFromSmiles(smiles_str)
+#     print(f'Number of atoms={mol.GetNumAtoms()}', f'Number of bonds={mol.GetNumBonds()}')
+#     feat = GNNFeaturizer()
+#     feat.featurize([mol], smiles_str)

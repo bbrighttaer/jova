@@ -64,8 +64,10 @@ class UnimodalAttentionData(object):
 
         # retrieve protein profiles
         x = [torch.tensor(self.prot_profile[prot[1]].tolist(), dtype=torch.long) for prot in self.raw_x]
+
         # get the maximum number of sub-sequence groups in the batch
         max_seq = max([len(p) for p in x])
+
         # pad sequences for batch processing
         x = [pad(tensor, (0, 0, 0, max_seq - tensor.shape[0]), value=len(self.prot_vocab)) for tensor in x]
         x = torch.stack(x, dim=0).long()  # structure as [batch, num_seg, dim]
