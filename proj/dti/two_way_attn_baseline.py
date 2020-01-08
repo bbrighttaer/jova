@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import random
 import time
 from datetime import datetime as dt
@@ -427,8 +428,8 @@ class TwoWayAttnBaseline(Trainer):
         return {'model': model, 'score': best_score, 'epoch': best_epoch}
 
     @staticmethod
-    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
-                       tasks, sim_data_node=None):
+    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, prot_model_type, transformers_dict,
+                       prot_desc_dict, tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
         model.load_state_dict(jova.utils.io.load_model(model_dir, model_name))
         model.eval()
@@ -460,9 +461,9 @@ class TwoWayAttnBaseline(Trainer):
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
-                    batch_size, data = batch_collator(batch, prot_desc_dict, spec={"gconv": True,
-                                                                                   "ecfp8": True})
-
+                    batch_size, data = batch_collator(batch, prot_desc_dict, spec={"weave": use_weave,
+                                                                                   "gconv": use_gconv,
+                                                                                   "gnn": use_gnn})
                     # organize the data for each view.
                     Xs = {}
                     Ys = {}
@@ -470,7 +471,7 @@ class TwoWayAttnBaseline(Trainer):
                     for view_name in data:
                         view_data = data[view_name]
                         if view_name == "gconv":
-                            x = ((view_data[0][0], batch_size), view_data[0][1])
+                            x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
                             Xs["gconv"] = x
                         else:
                             Xs[view_name] = view_data[0]
@@ -484,9 +485,19 @@ class TwoWayAttnBaseline(Trainer):
                         for i in range(1, len(Ys.values())):
                             assert (list(Ys.values())[i - 1] == list(Ys.values())[i]).all()
 
-                        y_true = Ys["gconv"]
-                        w = Ws["gconv"]
-                        X = ((Xs["gconv"][0], Xs["ecfp8"][0]), Xs["gconv"][1])
+                        y_true = Ys[list(Xs.keys())[0]]
+                        w = Ws[list(Xs.keys())[0]]
+                        if prot_model_type == "p2v" or prot_model_type == "rnn":
+                            protein_x = Xs[list(Xs.keys())[0]][2]
+                        else:
+                            protein_x = Xs[list(Xs.keys())[0]][1]
+                        X = []
+                        if use_prot:
+                            X.append(protein_x)
+                        if use_weave:
+                            X.append(Xs["weave"][0])
+                        if use_gconv:
+                            X.append(Xs["gconv"][0])
                         y_predicted = model(X)
 
                         # apply transformers
@@ -526,8 +537,14 @@ def main(pid, flags):
     # Simulation data resource tree
     split_label = flags.split
     dataset_lbl = flags["dataset_name"]
-    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
-                                         date_label)
+    # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
+    #                                      date_label)
+    node_label = json.dumps({'model_family': '2way-dti',
+                             'dataset': dataset_lbl,
+                             'split': split_label,
+                             'mode': "eval" if flags["eval"] else "train",
+                             'seeds': '-'.join([str(s) for s in seeds]),
+                             'date': date_label})
     sim_data = DataNode(label=node_label)
     nodes_list = []
     sim_data.data = nodes_list
@@ -668,7 +685,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
                                                         protein_profile=protein_profile)
     if flags["eval"]:
         trainer.evaluate_model(model, flags["model_dir"], flags["eval_model_name"],
-                               data_loaders, metrics, transformers_dict, prot_desc_dict,
+                               data_loaders, metrics, prot_model_type, transformers_dict, prot_desc_dict,
                                tasks, sim_data_node=sim_data_node)
     else:
         # Train the model
@@ -735,23 +752,23 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
-        "latent_dim": 128,
-        "siamese_hdims": [645, 1541, 2003, 349],
+        "latent_dim": 512,
+        "siamese_hdims": [1205, 660],
 
         # weight initialization
         "kaiming_constant": 5,
 
         # dropout
-        "dprob": 0.26715594537068543,
+        "dprob": 0.44139203182247566,
 
-        "tr_batch_size": 128,
+        "tr_batch_size": 256,
         "val_batch_size": 128,
         "test_batch_size": 128,
 
         # optimizer params
-        "optimizer": "rmsprop",
-        "optimizer__global__weight_decay": 0.121335889653886,
-        "optimizer__global__lr": 0.032845433149374166,
+        "optimizer": "adam",
+        "optimizer__global__weight_decay": 0.4517100308903878,
+        "optimizer__global__lr": 0.10024215203646224,
 
         "prot": {
             "model_type": 'rnn',
@@ -765,7 +782,7 @@ def default_hparams_bopt(flags):
             "update_pairs": False,
         },
         "gconv": {
-            "dim": 217,
+            "dim": 113,
         }
     }
 

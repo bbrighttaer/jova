@@ -25,7 +25,7 @@ from soek import *
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-
+import json
 import jova.metrics as mt
 import jova.utils.io
 from jova import cuda
@@ -546,8 +546,16 @@ def main(pid, flags):
     split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
         flags["cold_drug"] else "None"
     dataset_lbl = flags["dataset_name"]
-    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
-                                         date_label)
+
+    # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
+    #                                      date_label)
+    node_label = json.dumps({'model_family': 'ivpgan',
+                             'dataset': dataset_lbl,
+                             'split': split_label,
+                             'seeds': '-'.join([str(s) for s in seeds]),
+                             'mode': "eval" if flags["eval"] else "train",
+                             'date': date_label
+                             })
     sim_data = DataNode(label=node_label)
     nodes_list = []
     sim_data.data = nodes_list

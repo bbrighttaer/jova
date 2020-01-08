@@ -11,6 +11,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import random
 import time
 from datetime import datetime as dt
@@ -46,7 +47,7 @@ seeds = [1, 8, 64]
 # seeds = [100, 200, 300]
 # seeds = [123, 124, 125]
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 
 def create_ecfp_net(hparams):
@@ -400,7 +401,7 @@ class CPIBaseline(Trainer):
 
     @staticmethod
     def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
-                       tasks, view, sim_data_node=None):
+                       tasks, view_lbl, sim_data_node=None):
         # load saved model and put in evaluation mode
         model.load_state_dict(load_model(model_dir, model_name))
         model.eval()
@@ -432,15 +433,17 @@ class CPIBaseline(Trainer):
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
-                    batch_size, data = batch_collator(batch, prot_desc_dict, spec=view)
+                    batch_size, data = batch_collator(batch, prot_desc_dict, spec=view_lbl,
+                                                      cuda_prot=False)
                     # Data
-                    if view == "gconv":
+                    protein_x = data[view_lbl][0][2]
+                    if view_lbl == "gconv":
                         # graph data structure is: [(compound data, batch_size), protein_data]
-                        X = ((data[view][0][0], batch_size), data[view][0][1])
+                        X = ((data[view_lbl][0][0], batch_size), protein_x)
                     else:
-                        X = data[view][0]
-                    y_true = data[view][1]
-                    w = data[view][2].reshape(-1, 1).astype(np.float)
+                        X = (data[view_lbl][0][0], protein_x)
+                    y_true = np.array([k for k in data[view_lbl][1]], dtype=np.float)
+                    w = np.array([k for k in data[view_lbl][2]], dtype=np.float)
 
                     # forward propagation
                     with torch.set_grad_enabled(False):
@@ -448,13 +451,13 @@ class CPIBaseline(Trainer):
 
                         # apply transformers
                         predicted_vals.extend(undo_transforms(y_predicted.cpu().detach().numpy(),
-                                                              transformers_dict[view]).squeeze().tolist())
+                                                              transformers_dict[view_lbl]).squeeze().tolist())
                         true_vals.extend(undo_transforms(y_true,
-                                                         transformers_dict[view]).astype(np.float).squeeze().tolist())
+                                                         transformers_dict[view_lbl]).astype(np.float).squeeze().tolist())
 
                     eval_dict = {}
                     score = CPIBaseline.evaluate(eval_dict, y_true, y_predicted, w, metrics, tasks,
-                                                 transformers_dict[view])
+                                                 transformers_dict[view_lbl])
 
                     # for sim data resource
                     scores_lst.append(score)
@@ -489,8 +492,16 @@ def main(pid, flags):
         # Simulation data resource tree
         split_label = flags.split
         dataset_lbl = flags["dataset_name"]
-        node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, view, split_label, "eval" if flags["eval"] else "train",
-                                             date_label)
+        # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, view, split_label, "eval" if flags["eval"] else "train",
+        #                                      date_label)
+        node_label = json.dumps({'model_family': 'cpi',
+                                 'dataset': dataset_lbl,
+                                 'cview': 'gnn',
+                                 'pview': 'pcnna',
+                                 'split': split_label,
+                                 'seeds': '-'.join([str(s) for s in seeds]),
+                                 'mode': "eval" if flags["eval"] else "train",
+                                 'date': date_label})
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list
@@ -625,7 +636,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     if flags["eval"]:
         trainer.evaluate_model(model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
-                               prot_desc_dict, tasks, view=view, sim_data_node=sim_data_node)
+                               prot_desc_dict, tasks, view_lbl=view, sim_data_node=sim_data_node)
     else:
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, frozen_models,

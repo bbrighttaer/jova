@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import random
 import time
 from datetime import datetime as dt
@@ -468,8 +469,15 @@ def main(pid, flags):
     split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
         flags["cold_drug"] else "None"
     dataset_lbl = flags["dataset_name"]
-    node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
-                                         date_label)
+    # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
+    #                                      date_label)
+    node_label = json.dumps({'model_family': 'IntView',
+                             'dataset': dataset_lbl,
+                             'split': split_label,
+                             'seeds': '-'.join([str(s) for s in seeds]),
+                             'mode': "eval" if flags["eval"] else "train",
+                             'date': date_label
+                             })
     sim_data = DataNode(label=node_label)
     nodes_list = []
     sim_data.data = nodes_list
@@ -512,7 +520,6 @@ def main(pid, flags):
         tasks = data_dict["gconv"][0]
         # multi-task or single task is determined by the number of tasks w.r.t. the dataset loaded
         flags["tasks"] = tasks
-
 
         trainer = IntegratedViewDTI()
 

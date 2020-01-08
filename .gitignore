@@ -22,6 +22,7 @@
 
 # saved model parameters
 *.mod
+*.npy
 
 # analysis plots
 proj/**/analysis/**/*.pdf

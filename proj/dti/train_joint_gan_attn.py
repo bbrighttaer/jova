@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import logging
 import random
 import time
@@ -603,8 +604,8 @@ class JovaGAN(Trainer):
         return {'model': generator, 'score': best_score, 'epoch': best_epoch}
 
     @staticmethod
-    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
-                       tasks, sim_data_node=None):
+    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, prot_model_types,
+                       transformers_dict, prot_desc_dict, tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
         model.load_state_dict(jova.utils.io.load_model(model_dir, model_name))
         model.eval()
@@ -636,8 +637,8 @@ class JovaGAN(Trainer):
                 # Iterate through mini-batches
                 i = 0
                 for batch in tqdm(data_loaders[phase]):
-                    batch_size, data = batch_collator(batch, prot_desc_dict, spec={"gconv": True,
-                                                                                   "ecfp8": True})
+                    spec = {v: True for v in views_reg.c_views}
+                    batch_size, data = batch_collator(batch, prot_desc_dict, spec, cuda_prot=True)
 
                     # organize the data for each view.
                     Xs = {}
@@ -646,23 +647,36 @@ class JovaGAN(Trainer):
                     for view_name in data:
                         view_data = data[view_name]
                         if view_name == "gconv":
-                            x = ((view_data[0][0], batch_size), view_data[0][1])
+                            x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
                             Xs["gconv"] = x
                         else:
                             Xs[view_name] = view_data[0]
-                        Ys[view_name] = view_data[1]
-                        Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
+                        Ys[view_name] = np.array([k for k in view_data[1]], dtype=np.float)
+                        Ws[view_name] = np.array([k for k in view_data[2]], dtype=np.float)
 
                     # forward propagation
                     with torch.set_grad_enabled(False):
                         Ys = {k: Ys[k].astype(np.float) for k in Ys}
                         # Ensure corresponding pairs
-                        for i in range(1, len(Ys.values())):
-                            assert (list(Ys.values())[i - 1] == list(Ys.values())[i]).all()
+                        for j in range(1, len(Ys.values())):
+                            assert (list(Ys.values())[j - 1] == list(Ys.values())[j]).all()
 
-                        y_true = Ys["gconv"]
-                        w = Ws["gconv"]
-                        X = ((Xs["gconv"][0], Xs["ecfp8"][0]), Xs["gconv"][1])
+                        y_true = Ys[list(Xs.keys())[0]]
+                        w = Ws[list(Xs.keys())[0]]
+
+                        # protein data in batch
+                        protein_xs = []
+                        for m_type in prot_model_types:
+                            if m_type in views_reg.embedding_based_views:
+                                protein_xs.append(Xs[list(Xs.keys())[0]][2])
+                            else:  # m_type == "psc":
+                                protein_xs.append(Xs[list(Xs.keys())[0]][1])
+
+                        # compound data in batch
+                        X = [Xs[v][0] for v in views_reg.c_views]
+
+                        # merge compound and protein list
+                        X = X + protein_xs
                         y_predicted = model(X)
 
                         # apply transformers
@@ -720,8 +734,16 @@ def main(flags):
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         dataset_lbl = flags["dataset_name"]
-        node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
-                                             date_label)
+        # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
+        #                                      date_label)
+        node_label = json.dumps({'model_family': 'jova-gan',
+                                 'dataset': dataset_lbl,
+                                 'cviews': '-'.join(views_reg.c_views),
+                                 'pviews': '-'.join(views_reg.p_views),
+                                 'split': split_label,
+                                 'mode': "eval" if flags["eval"] else "train",
+                                 'seeds': '-'.join([str(s) for s in seeds]),
+                                 'date': date_label})
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list

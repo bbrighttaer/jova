@@ -11,6 +11,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import os
 import pickle
 import random
@@ -183,8 +184,17 @@ def main(flags):
 
         # Simulation data resource tree
         split_label = flags.split
-        node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
-                                                "eval" if flags["eval"] else "train", date_label)
+        # node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label,
+        #                                         "eval" if flags["eval"] else "train", date_label)
+        node_label = json.dumps({'model_family': 'mf',
+                                 'dataset': dataset_lbl,
+                                 'cview': cview,
+                                 'pview': pview,
+                                 'split': split_label,
+                                 'seeds': '-'.join([str(s) for s in seeds]),
+                                 'mode': "eval" if flags["eval"] else "train",
+                                 'date': date_label
+                                 })
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list

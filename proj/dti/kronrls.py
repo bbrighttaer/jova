@@ -10,6 +10,7 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import argparse
+import json
 import multiprocessing as mp
 import os
 import random
@@ -181,8 +182,8 @@ class KronRLS(Trainer):
                 metrics_dict[m].append(eval_dict[m])
             else:
                 metrics_dict[m] = [eval_dict[m]]
-        # apply transformers
 
+        # apply transformers
         y_hat = y_hat[w.nonzero()[0]]
         y = y[w.nonzero()[0]]
         predicted_vals.extend(undo_transforms(y_hat, transformer).squeeze().tolist())
@@ -226,8 +227,13 @@ def main(flags):
         split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
             flags["cold_drug"] else "None"
         dataset_lbl = flags["dataset_name"]
-        node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label,
-                                             "eval" if flags["eval"] else "train", date_label)
+        # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label,
+        #                                      "eval" if flags["eval"] else "train", date_label)
+        node_label = json.dumps({'model_family': 'kronrls',
+                                 'dataset': dataset_lbl,
+                                 'mode': "eval" if flags["eval"] else "train",
+                                 'seeds': '-'.join([str(s) for s in seeds]),
+                                 'date': date_label})
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list

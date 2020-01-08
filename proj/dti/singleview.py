@@ -11,6 +11,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import os
 import random
 import time
@@ -20,7 +21,6 @@ import numpy as np
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim.lr_scheduler as sch
 from soek import *
 from torch.utils.data import DataLoader
@@ -48,7 +48,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [123, 124, 125]
 seeds = [1, 8, 64]
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 
 def create_prot_net(hparams, protein_profile):
@@ -452,7 +452,7 @@ class SingleViewDTI(Trainer):
                        tasks, view, sim_data_node=None):
         comp_view, prot_view = view
         # load saved model and put in evaluation mode
-        model.load_state_dict(load_model(model_dir, model_name, dvc=torch.device('cuda:2')))
+        model.load_state_dict(load_model(model_dir, model_name, dvc=torch.device('cuda:0')))
         model.eval()
 
         print("Model evaluation...")
@@ -546,7 +546,15 @@ def main(id, flags):
         print("CUDA={}, {}".format(cuda, sim_label))
 
         # Simulation data resource tree
-        node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label, mode, date_label)
+        # node_label = "{}_{}_{}_{}_{}_{}".format(dataset_lbl, cview, pview, split_label, mode, date_label)
+        node_label = json.dumps({'model_family': 'singleview',
+                                 'dataset': dataset_lbl,
+                                 'cview': cview,
+                                 'pview': pview,
+                                 'split': split_label,
+                                 'mode': mode,
+                                 'seeds': '-'.join([str(s) for s in seeds]),
+                                 'date': date_label})
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list

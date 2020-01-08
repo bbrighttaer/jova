@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import os
 import random
 import time
@@ -50,12 +51,13 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 # seeds = [1, 8, 64]
 # seeds = [10, 20, 30]
-seeds = [11, 21, 31]
-# seeds = [123, 124, 125]
+# seeds = [11, 21, 31]
+seeds = [123, 124, 125]
+# seeds = [22, 32, 42]
 
 check_data = False
 
-torch.cuda.set_device(3)
+torch.cuda.set_device(2)
 
 joint_attention_data = MultimodalAttentionData()
 
@@ -776,7 +778,15 @@ def main(pid, flags):
         else:
             mode = "train"
 
-        node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, mode, date_label)
+        # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, mode, date_label)
+        node_label = json.dumps({'model_family': 'jova',
+                                 'dataset': dataset_lbl,
+                                 'cviews': '-'.join(views_reg.c_views),
+                                 'pviews': '-'.join(views_reg.p_views),
+                                 'split': split_label,
+                                 'mode': mode,
+                                 'seeds': '-'.join([str(s) for s in seeds]),
+                                 'date': date_label})
         sim_data = DataNode(label=node_label)
         nodes_list = []
         sim_data.data = nodes_list
