@@ -49,9 +49,7 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR, filen
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [1, 8, 64]
-# seeds = [8, 16, 32]
-seeds = [100, 7, 491]
+seeds = [1, 8, 64]
 
 check_data = False
 

@@ -1,0 +1,1 @@
+python train_joint_gan.py --dataset_name davis --dataset_file ../../data/davis_data/restructured.csv --fold_num 5 --prot_desc_path ../../data/davis_data/prot_desc.csv --model_dir ./model_dir/davis --filter_threshold 6 --split cold_target --eval --eval_model_name davis_integrated_view_gan_ecfp8_gconv_psc_model-2019_12_08__15_04_14_cold_target_81_0.2156.mod

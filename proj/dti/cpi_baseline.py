@@ -44,8 +44,6 @@ currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 seeds = [1, 8, 64]
-# seeds = [100, 200, 300]
-# seeds = [123, 124, 125]
 
 torch.cuda.set_device(0)
 

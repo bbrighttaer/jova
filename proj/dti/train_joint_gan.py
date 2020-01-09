@@ -12,6 +12,7 @@ from __future__ import unicode_literals
 
 import argparse
 import copy
+import json
 import random
 import time
 from datetime import datetime as dt
@@ -25,7 +26,7 @@ from soek import *
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-import json
+
 import jova.metrics as mt
 import jova.utils.io
 from jova import cuda
@@ -44,12 +45,12 @@ from jova.utils.train_helpers import count_parameters
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [123, 124, 125]
 seeds = [1, 8, 64]
 
 check_data = False
 
-torch.cuda.set_device(1)
+dvc_id = 2
+torch.cuda.set_device(dvc_id)
 
 
 def create_integrated_net(hparams):
@@ -445,7 +446,7 @@ class IVPGAN(Trainer):
     def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict, prot_desc_dict,
                        tasks, sim_data_node=None):
         # load saved model and put in evaluation mode
-        model.load_state_dict(load_model(model_dir, model_name))
+        model.load_state_dict(load_model(model_dir, model_name, dvc=torch.device(f'cuda:{dvc_id}')))
         model.eval()
 
         print("Model evaluation...")

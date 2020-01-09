@@ -15,6 +15,7 @@ import multiprocessing as mp
 import os
 import random
 import time
+from collections import defaultdict
 from datetime import datetime as dt
 
 import numpy as np
@@ -28,12 +29,11 @@ from jova.data.data import Pair
 from jova.metrics import compute_model_performance
 from jova.trans import undo_transforms
 from jova.utils import Trainer
-from jova.utils.io import save_numpy_array, load_numpy_array
+from jova.utils.io import load_dict_model, save_dict_model
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-# seeds = [123, 124, 125]
 seeds = [1, 8, 64]
 
 
@@ -140,7 +140,7 @@ class KronRLS(Trainer):
 
         duration = time.time() - start
         print('\nModel training duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
-        return {'model': A, 'score': score, 'epoch': 0}
+        return {'model': {'weights': A, 'data': data['train']}, 'score': score, 'epoch': 0}
 
     @staticmethod
     def evaluate_model(data, model_dir, model_file, metrics, transformer, drug_kernel_dict, prot_kernel_dict, tasks,
@@ -160,13 +160,33 @@ class KronRLS(Trainer):
         kernel_data = data['kernel_data']
 
         # compute weights
-        A = load_numpy_array(os.path.join(model_dir, model_file))
+        model = load_dict_model(model_dir, model_file)
+        train_set = model['data']
+        A = model['weights']
+
+        # Test data
+        train_mol = set()
+        train_prot = set()
+        for im, (x, _, _) in enumerate(zip(*train_set)):
+            mol, prot = x
+            train_mol.add(mol)
+            train_prot.add(prot)
+        eval_mol = set()
+        eval_prot = set()
+        labels_eval = defaultdict(lambda: float())
+        weights_eval = defaultdict(lambda: float())
+        for im, (x, y, w) in enumerate(zip(*data['test'])):
+            dx, tx = x
+            eval_mol.add(dx)
+            eval_prot.add(tx)
+            labels_eval[Pair(dx, tx)] = float(y)
+            weights_eval[Pair(dx, tx)] = float(w)
 
         # Test
-        KD_eval = kernel_data['KD_test']
-        KT_eval = kernel_data['KT_test']
-        Y_eval = kernel_data['Y_test']
-        W_eval = kernel_data['W_test']
+        KD_eval = np.array([[drug_kernel_dict[Pair(c1, c2)] for c2 in train_mol] for c1 in eval_mol], dtype=np.float)
+        KT_eval = np.array([[prot_kernel_dict[Pair(p1, p2)] for p2 in train_prot] for p1 in eval_prot], dtype=np.float)
+        Y_eval = np.array([[labels_eval[Pair(c, p)] for p in eval_prot] for c in eval_mol], dtype=np.float)
+        W_eval = np.array([[weights_eval[Pair(c, p)] for p in eval_prot] for c in eval_mol], dtype=np.float)
 
         P_val = KD_eval @ A @ KT_eval.T
         y_hat = P_val.reshape(-1, 1)
@@ -224,14 +244,14 @@ def main(flags):
         print(sim_label)
 
         # Simulation data resource tree
-        split_label = "warm" if flags["split_warm"] else "cold_target" if flags["cold_target"] else "cold_drug" if \
-            flags["cold_drug"] else "None"
+        split_label = flags['split']
         dataset_lbl = flags["dataset_name"]
         # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label,
         #                                      "eval" if flags["eval"] else "train", date_label)
         node_label = json.dumps({'model_family': 'kronrls',
                                  'dataset': dataset_lbl,
                                  'mode': "eval" if flags["eval"] else "train",
+                                 'split': split_label,
                                  'seeds': '-'.join([str(s) for s in seeds]),
                                  'date': date_label})
         sim_data = DataNode(label=node_label)
@@ -357,9 +377,9 @@ def start_fold(sim_data_node, data, flags, hyper_params, tasks, trainer, transfo
                                 tasks=tasks, sim_data_node=sim_data_node)
         model, score, epoch = results['model'], results['score'], results['epoch']
         # Save the model.
-        save_numpy_array(model, flags["model_dir"],
-                         "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
-                                                        flags.split, epoch, score))
+        save_dict_model(model, flags["model_dir"],
+                        "{}_{}_{}_{}_{}_{:.4f}".format(flags["dataset_name"], view, flags["model_name"],
+                                                       flags.split, epoch, score))
 
 
 def default_hparams_rand(flags):

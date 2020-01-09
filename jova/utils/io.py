@@ -348,7 +348,7 @@ def load_dict_model(path, name):
     return load_pickle(os.path.join(path, name))
 
 
-def load_model(path, name, dvc=torch.device("cuda:0")):
+def load_model(path, name, dvc=None):
     """
     Loads the parameters of a model.
 
@@ -356,6 +356,8 @@ def load_model(path, name, dvc=torch.device("cuda:0")):
     :param name:
     :return: The saved state_dict.
     """
+    if dvc is None:
+        dvc = torch.device("cuda:0")
     return torch.load(os.path.join(path, name), map_location=dvc)
 
 
@@ -374,8 +376,8 @@ def save_numpy_array(array, path, name):
     np.save(file, array, allow_pickle=True)
 
 
-def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformers, gnn_fingerprint, drug_kernel_dict,
-                                   prot_kernel_dict, simboost_pairwise_feats_dict, mf_entities_dict):
+def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformers, gnn_fingerprint, all_drug_sim_dict,
+                                   all_prots_sim_dict, simboost_pairwise_feats_dict, mf_entities_dict):
     assert fold_num > 1
     for i in range(fold_num):
         fold_dir = os.path.join(save_dir, "fold" + str(i + 1))
@@ -393,7 +395,7 @@ def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformer
             test_data.move(test_dir)
 
         # process kernel / kronrls data
-        if drug_kernel_dict and prot_kernel_dict:
+        if all_drug_sim_dict and all_prots_sim_dict:
             save_kernel_data(fold_dataset[i][3], test_data, test_dir, train_data, train_dir, valid_data, valid_dir)
 
     with open(os.path.join(save_dir, "transformers.pkl"), "wb") as f:
@@ -401,12 +403,12 @@ def save_nested_cv_dataset_to_disk(save_dir, fold_dataset, fold_num, transformer
     if gnn_fingerprint is not None:
         with open(os.path.join(save_dir, "gnn_fingerprint_dict.pkl"), "wb") as f:
             pickle.dump(dict(gnn_fingerprint), f)
-    if drug_kernel_dict is not None:
+    if all_drug_sim_dict is not None:
         with open(os.path.join(save_dir, "drug_drug_kernel_dict.pkl"), "wb") as f:
-            pickle.dump(dict(drug_kernel_dict), f)
-    if prot_kernel_dict is not None:
+            pickle.dump(dict(all_drug_sim_dict), f)
+    if all_prots_sim_dict is not None:
         with open(os.path.join(save_dir, "prot_prot_kernel_dict.pkl"), "wb") as f:
-            pickle.dump(dict(prot_kernel_dict), f)
+            pickle.dump(dict(all_prots_sim_dict), f)
     if simboost_pairwise_feats_dict is not None:
         with open(os.path.join(save_dir, "simboost_pairwise_feats_dict.pkl"), "wb") as f:
             pickle.dump(dict(simboost_pairwise_feats_dict), f)
@@ -518,7 +520,7 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
 
     gnn_fingerprint = None
     mf_entities_dict = None
-    simboost_pairwise_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
+    simboost_pairwise_feats_dict = all_drugs_sim_dict = all_prots_sim_dict = None
 
     if os.path.exists(os.path.join(save_dir, "gnn_fingerprint_dict.pkl")):
         with open(os.path.join(save_dir, "gnn_fingerprint_dict.pkl"), "rb") as f:
@@ -526,10 +528,10 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
 
     if os.path.exists(os.path.join(save_dir, "drug_drug_kernel_dict.pkl")):
         with open(os.path.join(save_dir, "drug_drug_kernel_dict.pkl"), "rb") as f:
-            drug_sim_kernel_dict = pickle.load(f)
+            all_drugs_sim_dict = pickle.load(f)
     if os.path.exists(os.path.join(save_dir, "prot_prot_kernel_dict.pkl")):
         with open(os.path.join(save_dir, "prot_prot_kernel_dict.pkl"), "rb") as f:
-            prot_sim_kernel_dict = pickle.load(f)
+            all_prots_sim_dict = pickle.load(f)
 
     if os.path.exists(os.path.join(save_dir, "simboost_pairwise_feats_dict.pkl")):
         with open(os.path.join(save_dir, "simboost_pairwise_feats_dict.pkl"), "rb") as f:
@@ -542,7 +544,7 @@ def load_nested_cv_dataset_from_disk(save_dir, fold_num):
     with open(os.path.join(save_dir, "transformers.pkl"), 'rb') as f:
         transformers = pickle.load(f)
         return loaded, list(zip(train_data, valid_data, test_data, kernel_data)), transformers, gnn_fingerprint, \
-               (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_pairwise_feats_dict, mf_entities_dict
+               (all_drugs_sim_dict, all_prots_sim_dict), simboost_pairwise_feats_dict, mf_entities_dict
 
 
 def load_dataset_from_disk(save_dir):

@@ -120,7 +120,7 @@ if __name__ == '__main__':
         mode = metadata['mode']
         split = metadata['split'].replace('_', ' ')
         date = metadata['date']
-        model = {'cpi': 'CPI',
+        model = {'cpi': lambda: 'CPI',
                  'kronrls': lambda: 'KronRLS',
                  'simboost': lambda: 'SimBoost',
                  'singleview': lambda: f'{map_name(metadata["cview"])}-{map_name(metadata["pview"])}',

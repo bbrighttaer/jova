@@ -28,7 +28,7 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
     gnn_fingerprint = None
     MF_entities_dict = None
     # for SimBoost, Kron-RLS and other kernel-based methods
-    simboost_drug_target_feats_dict = drug_sim_kernel_dict = prot_sim_kernel_dict = None
+    simboost_drug_target_feats_dict = all_drugs_sim_dict = all_prots_sim_dict = None
 
     dataset_file = os.path.join(data_dir, file_name)
     headers = list(pd.read_csv(dataset_file, header=0, index_col=False, nrows=0))
@@ -120,22 +120,22 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
         kernel_data = None
         train, valid, test = splitter.train_valid_test_split(dataset, seed=seed)
         merged_dataset = DiskDataset.merge([train, valid, test])
-        MF_entities_dict, drug_sim_kernel_dict, prot_sim_kernel_dict, \
+        MF_entities_dict, all_drugs_sim_dict, all_prots_sim_dict, \
         simboost_drug_target_feats_dict = compute_mf_kronrls_simboost_info(
-            MF_entities_dict, merged_dataset, drug_sim_kernel_dict, feat_label, mf_simboost_data_dict,
-            prot_sim_kernel_dict,
+            MF_entities_dict, merged_dataset, all_drugs_sim_dict, feat_label, mf_simboost_data_dict,
+            all_prots_sim_dict,
             simboost_drug_target_feats_dict)
 
         # process kernel / kronrls data
-        if drug_sim_kernel_dict and prot_sim_kernel_dict:
+        if all_drugs_sim_dict and all_prots_sim_dict:
             print('Constructing kernel data')
-            kernel_data = compute_train_val_test_kronrls_mats(train, valid, test, drug_sim_kernel_dict,
-                                                              prot_sim_kernel_dict)
+            kernel_data = compute_train_val_test_kronrls_mats(train, valid, test, all_drugs_sim_dict,
+                                                              all_prots_sim_dict)
             kernel_data = _wrap_kernel_data(kernel_data)
         all_dataset = (train, valid, test, kernel_data)
         if reload:
-            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_sim_kernel_dict,
-                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data, MF_entities_dict)
+            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, all_drugs_sim_dict,
+                                 all_prots_sim_dict, simboost_drug_target_feats_dict, kernel_data, MF_entities_dict)
     elif cross_validation:
         fold_datasets = splitter.k_fold_split(dataset, K, seed=seed)
         fold_datasets = list(fold_datasets)
@@ -146,26 +146,26 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
             merged_dataset.append(fold[1])
             merged_dataset.append(fold[2])
         merged_dataset = DiskDataset.merge(merged_dataset)
-        MF_entities_dict, drug_sim_kernel_dict, prot_sim_kernel_dict, \
+        MF_entities_dict, all_drugs_sim_dict, all_prots_sim_dict, \
         simboost_drug_target_feats_dict = compute_mf_kronrls_simboost_info(MF_entities_dict, merged_dataset,
-                                                                           drug_sim_kernel_dict, feat_label,
-                                                                           mf_simboost_data_dict, prot_sim_kernel_dict,
+                                                                           all_drugs_sim_dict, feat_label,
+                                                                           mf_simboost_data_dict, all_prots_sim_dict,
                                                                            simboost_drug_target_feats_dict)
 
         # process kernel / kronrls data if simulation is in kernel mode
-        if drug_sim_kernel_dict and prot_sim_kernel_dict:
+        if all_drugs_sim_dict and all_prots_sim_dict:
             print('Constructing kernel data')
             fold_ds = []
             for fold in fold_datasets:
-                kernel_data = compute_train_val_test_kronrls_mats(fold[0], fold[1], fold[2], drug_sim_kernel_dict,
-                                                                  prot_sim_kernel_dict)
+                kernel_data = compute_train_val_test_kronrls_mats(fold[0], fold[1], fold[2], all_drugs_sim_dict,
+                                                                  all_prots_sim_dict)
                 kernel_data = _wrap_kernel_data(kernel_data)
                 fold_ds.append(list(fold) + [kernel_data])
             fold_datasets = fold_ds
         all_dataset = fold_datasets
         if reload:
             save_nested_cv_dataset_to_disk(save_dir, all_dataset, K, transformers, gnn_fingerprint,
-                                           drug_sim_kernel_dict, prot_sim_kernel_dict,
+                                           all_drugs_sim_dict, all_prots_sim_dict,
                                            simboost_drug_target_feats_dict,
                                            MF_entities_dict)
     else:
@@ -175,25 +175,25 @@ def load_csv_dataset(dataset_name, dataset_file, featurizer='Weave', cross_valid
                                                              frac_test=0, seed=seed)
 
         merged_dataset = DiskDataset.merge([train, valid])
-        MF_entities_dict, drug_sim_kernel_dict, prot_sim_kernel_dict, \
+        MF_entities_dict, all_drugs_sim_dict, all_prots_sim_dict, \
         simboost_drug_target_feats_dict = compute_mf_kronrls_simboost_info(MF_entities_dict, merged_dataset,
-                                                                           drug_sim_kernel_dict, feat_label,
-                                                                           mf_simboost_data_dict, prot_sim_kernel_dict,
+                                                                           all_drugs_sim_dict, feat_label,
+                                                                           mf_simboost_data_dict, all_prots_sim_dict,
                                                                            simboost_drug_target_feats_dict)
 
         # process kernel / kronrls data
-        if drug_sim_kernel_dict and prot_sim_kernel_dict:
+        if all_drugs_sim_dict and all_prots_sim_dict:
             print('Constructing kernel data')
-            kernel_data = compute_train_val_test_kronrls_mats(train, valid, test, drug_sim_kernel_dict,
-                                                              prot_sim_kernel_dict)
+            kernel_data = compute_train_val_test_kronrls_mats(train, valid, test, all_drugs_sim_dict,
+                                                              all_prots_sim_dict)
             kernel_data = _wrap_kernel_data(kernel_data)
         all_dataset = (train, valid, test, kernel_data)
         if reload:
-            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, drug_sim_kernel_dict,
-                                 prot_sim_kernel_dict, simboost_drug_target_feats_dict, kernel_data, MF_entities_dict)
+            save_dataset_to_disk(save_dir, train, valid, test, transformers, gnn_fingerprint, all_drugs_sim_dict,
+                                 all_prots_sim_dict, simboost_drug_target_feats_dict, kernel_data, MF_entities_dict)
 
     return tasks, all_dataset, transformers, gnn_fingerprint, \
-           (drug_sim_kernel_dict, prot_sim_kernel_dict), simboost_drug_target_feats_dict, MF_entities_dict
+           (all_drugs_sim_dict, all_prots_sim_dict), simboost_drug_target_feats_dict, MF_entities_dict
 
 
 def compute_mf_kronrls_simboost_info(MF_entities_dict, dataset, drug_sim_kernel_dict, feat_label, mf_simboost_data_dict,
