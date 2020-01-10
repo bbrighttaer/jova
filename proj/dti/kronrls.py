@@ -183,10 +183,16 @@ class KronRLS(Trainer):
             weights_eval[Pair(dx, tx)] = float(w)
 
         # Test
-        KD_eval = np.array([[drug_kernel_dict[Pair(c1, c2)] for c2 in train_mol] for c1 in eval_mol], dtype=np.float)
-        KT_eval = np.array([[prot_kernel_dict[Pair(p1, p2)] for p2 in train_prot] for p1 in eval_prot], dtype=np.float)
-        Y_eval = np.array([[labels_eval[Pair(c, p)] for p in eval_prot] for c in eval_mol], dtype=np.float)
-        W_eval = np.array([[weights_eval[Pair(c, p)] for p in eval_prot] for c in eval_mol], dtype=np.float)
+        KD_eval2 = np.array([[drug_kernel_dict[Pair(c1, c2)] for c2 in train_mol] for c1 in eval_mol], dtype=np.float)
+        KT_eval2 = np.array([[prot_kernel_dict[Pair(p1, p2)] for p2 in train_prot] for p1 in eval_prot], dtype=np.float)
+        Y_eval2 = np.array([[labels_eval[Pair(c, p)] for p in eval_prot] for c in eval_mol], dtype=np.float)
+        W_eval2 = np.array([[weights_eval[Pair(c, p)] for p in eval_prot] for c in eval_mol], dtype=np.float)
+
+        # Test
+        KD_eval = kernel_data['KD_test']
+        KT_eval = kernel_data['KT_test']
+        Y_eval = kernel_data['Y_test']
+        W_eval = kernel_data['W_test']
 
         P_val = KD_eval @ A @ KT_eval.T
         y_hat = P_val.reshape(-1, 1)
