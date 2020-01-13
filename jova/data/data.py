@@ -679,7 +679,8 @@ def featurize_datasets(jova_args, feat_dict, flags, prot_seq_dict, seeds):
             for cv in dummy.c_views:
                 comp_views.add(cv)
         for v in comp_views:
-            get_data(feat_dict[v], flags, prot_sequences=prot_seq_dict, seed=seed)
+            d = get_data(feat_dict[v], flags, prot_sequences=prot_seq_dict, seed=seed)
+            del d
 
 
 def compute_train_val_test_kronrls_mats(train, val, test, Kd_dict, Kt_dict):

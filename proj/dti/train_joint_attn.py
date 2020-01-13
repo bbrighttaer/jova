@@ -53,7 +53,7 @@ seeds = [1, 8, 64]
 
 check_data = False
 
-dvc_id = 2
+dvc_id = 0
 torch.cuda.set_device(dvc_id)
 
 joint_attention_data = MultimodalAttentionData()
@@ -543,7 +543,7 @@ class Jova(Trainer):
         return {'model': model, 'score': best_score, 'epoch': best_epoch}
 
     @staticmethod
-    def evaluate_model(eval_fn, model, model_dir, model_name, data_loaders, metrics, transformers_dict,
+    def evaluate_model(model, model_dir, model_name, data_loaders, metrics, transformers_dict,
                        prot_desc_dict, prot_model_types, tasks, sim_data_node):
         # load saved model and put in evaluation mode
         model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc=torch.device(f"cuda:{dvc_id}")))
@@ -622,7 +622,7 @@ class Jova(Trainer):
                 true_vals.extend(np_to_plot_data(undo_transforms(y_true, transformer)))
 
             eval_dict = {}
-            score = eval_fn(eval_dict, y_true, y_predicted, w, metrics, tasks, transformer)
+            score = Jova.evaluate(eval_dict, y_true, y_predicted, w, metrics, tasks, transformer)
 
             # for sim data resource
             scores_lst.append(score)
@@ -936,7 +936,7 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
     if flags["eval"]:
         trainer.evaluate_model(model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict, prot_desc_dict, prot_model_types, tasks,
-                               sim_data_node)
+                               sim_data_node=sim_data_node)
     elif flags["explain"]:
         trainer.explain_model(model, flags["model_dir"], flags["eval_model_name"], data_loaders, transformers_dict,
                               prot_desc_dict, prot_model_types, sim_data_node)

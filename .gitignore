@@ -18,7 +18,6 @@
 *.joblib
 *.pkl
 *.gzip
-*.json
 
 # saved model parameters
 *.mod

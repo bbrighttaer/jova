@@ -1,0 +1,1 @@
+{"{\"model_family\": \"mf\", \"dataset\": \"metz\", \"cview\": \"ecfp8\", \"pview\": \"psc\", \"split\": \"warm\", \"seeds\": \"1-8-64\", \"mode\": \"train\", \"date\": \"2020_01_12__06_34_46\"}": [{"seed_1": [{"validation_metrics": {}}]}, {"seed_8": [{"validation_metrics": {}}]}, {"seed_64": [{"validation_metrics": {}}]}]}

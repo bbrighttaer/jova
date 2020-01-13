@@ -45,11 +45,11 @@ from jova.utils.train_helpers import count_parameters
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1, 8, 64]
+seeds = [123, 124, 125]
 
 check_data = False
 
-dvc_id = 2
+dvc_id = 1
 torch.cuda.set_device(dvc_id)
 
 
@@ -744,31 +744,34 @@ def default_hparams_bopt(flags):
         'output_dim': len(flags['tasks']),
         "prot_dim": 8421,
         "fp_dim": 1024,
-        "gconv_dim": 512,
-        "hdims": [1686, 3922, 981],
-        "disc_hdims": [1447],
+        "gconv_dim": 128,
+        "hdims": [2286, 1669, 2590],
+        "disc_hdims": [724, 561],
 
         # weight initialization
         "kaiming_constant": 5,
 
-        "weighted_loss": 0.7881333132164487,
+        "weighted_loss": 0.3,
 
         # dropout
-        "dprob": 0.5206534148323471,
+        "dprob": 0.0519347,
+        "disc_dprob": 0.137044,
 
-        "neigh_dist": 38,
+        "neigh_dist": 10,
 
         "tr_batch_size": 256,
-        "val_batch_size": 128,
-        "test_batch_size": 128,
+        "val_batch_size": 512,
+        "test_batch_size": 512,
 
         # optimizer params
         "optimizer_gen": "adagrad",
-        "optimizer_gen__global__weight_decay": 0.00019068915055028382,
-        "optimizer_gen__global__lr": 0.007760686713229159,
-        "optimizer_disc": "adamax",
-        "optimizer_disc__global__weight_decay": 0.0005859010994270156,
-        "optimizer_disc__global__lr": 0.0071985663751058335
+        "optimizer_gen__global__weight_decay": 0.00312756,
+        "optimizer_gen__global__lr": 0.000867065,
+        "optimizer_gen__adadelta__rho": 0.115873,
+        "optimizer_gen__adagrad__lr_decay": 0.000496165,
+        "optimizer_disc": "adadelta",
+        "optimizer_disc__global__weight_decay": 0.0540819,
+        "optimizer_disc__global__lr": 0.464296
     }
 
 

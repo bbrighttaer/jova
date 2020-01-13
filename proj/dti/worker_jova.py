@@ -86,8 +86,8 @@ if __name__ == '__main__':
     aggregation_dict = defaultdict(lambda: pd.DataFrame({'model': [], 'split': [], 'metric': [], 'value': [],
                                                          'stdev': [], 'mode': [], 'date': [], 'seeds': []}))
     chart_type = "png"
-    folder = "analysis"
-    qualifier = "model_family"
+    folder = "analysis/metz/eval/jova"
+    qualifier = 'metz'
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
     print('Number of files loaded=', len(files))
     files.sort()
@@ -125,8 +125,8 @@ if __name__ == '__main__':
                  'simboost': lambda: 'SimBoost',
                  'singleview': lambda: f'{map_name(metadata["cview"])}-{map_name(metadata["pview"])}',
                  'IntView': lambda: 'IntView',
-                 'jova': lambda: f'JoVA-{"-".join([map_name(lbl) for lbl in metadata["cviews"]])}'
-                                 f'-{"-".join([map_name(lbl) for lbl in metadata["pviews"]])}',
+                 'jova': lambda: f'{"-".join([map_name(lbl) for lbl in metadata["cviews"].split("-")])}'
+                                 f'-{"-".join([map_name(lbl) for lbl in metadata["pviews"].split("-")])}',
                  'ivpgan': lambda: 'IVPGAN',
                  '2way-dti': lambda: '2Way-DTI'}.get(metadata['model_family'], lambda: 'label-not-found')()
         if results_folder is None:
@@ -145,6 +145,8 @@ if __name__ == '__main__':
                                       'mode': mode,
                                       'date': date,
                                       'seeds': metadata['seeds']}, ignore_index=True)
+        if model == 'KronRLS':
+            print(model)
         aggregation_dict[metadata['dataset']] = dataframe
         print('\t', rms_mean_std)
 
