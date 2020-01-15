@@ -48,7 +48,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 seeds = [1, 8, 64]
 
 check_data = False
-dvc_id = 2
+dvc_id = 1
 torch.cuda.set_device(dvc_id)
 
 

@@ -49,7 +49,7 @@ seeds = [123, 124, 125]
 
 check_data = False
 
-dvc_id = 1
+dvc_id = 0
 torch.cuda.set_device(dvc_id)
 
 

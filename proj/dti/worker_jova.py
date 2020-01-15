@@ -86,8 +86,8 @@ if __name__ == '__main__':
     aggregation_dict = defaultdict(lambda: pd.DataFrame({'model': [], 'split': [], 'metric': [], 'value': [],
                                                          'stdev': [], 'mode': [], 'date': [], 'seeds': []}))
     chart_type = "png"
-    folder = "analysis/metz/eval/jova"
-    qualifier = 'metz'
+    folder = "analysis/davis/eval/jova"
+    qualifier = 'davis'
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
     print('Number of files loaded=', len(files))
     files.sort()
@@ -209,15 +209,24 @@ if __name__ == '__main__':
         # plot neighborhood histogram
         # plt.title(title)
         array_h1, array_v1 = np.meshgrid(y_true, y_true)
-        array_nvals1 = np.sort(np.abs(array_v1 - array_h1), axis=1)
-        plt.hist(array_nvals1.reshape(-1, ), bins=20, label='y_true', alpha=0.5)
+        array_nvals1 = np.sort(np.abs(array_v1 - array_h1), axis=1)[:, 1:]
+        plt.hist(array_nvals1.reshape(-1, ), bins=20, label='Ground truth', alpha=0.5)
 
         array_h2, array_v2 = np.meshgrid(y_pred, y_pred)
-        array_nvals2 = np.sort(np.abs(array_v2 - array_h2), axis=1)
-        plt.hist(array_nvals2.reshape(-1, ), bins=20, label='y_pred', alpha=0.5)
+        array_nvals2 = np.sort(np.abs(array_v2 - array_h2), axis=1)[:, 1:]
+        plt.hist(array_nvals2.reshape(-1, ), bins=20, label='Predicted', alpha=0.5)
 
         plt.legend(loc='best')
         plt.savefig(os.path.join(results_folder, root_name + 'neighborhood.' + chart_type))
+        plt.close('all')
+
+        # Distribution plot of the same neighborhood distances
+        sns.set(color_codes=True)
+        sns.set_style('ticks')
+        sns.kdeplot(array_nvals1.reshape(-1, ), shade=True, label='Ground truth')
+        sns.kdeplot(array_nvals2.reshape(-1, ), shade=True, label='Predicted')
+        sns.despine(offset=5, trim=True)
+        plt.savefig(os.path.join(results_folder, root_name + 'neighborhood_kde.' + chart_type))
 
         plt.close('all')
 
