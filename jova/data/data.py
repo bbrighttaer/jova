@@ -46,6 +46,8 @@ def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
         source = 'human'
     elif re.search('celegans', prot_desc_path, re.I):
         source = 'celegans'
+    elif re.search('case_study', prot_desc_path, re.I):
+        source = 'case_study'
 
     df = pd.read_csv(prot_desc_path, index_col=0)
     # protList = list(df.index)
@@ -378,7 +380,6 @@ def get_data(featurizer, flags, prot_sequences, seed, mf_simboost_data_dict=None
     return data
 
 
-
 def compute_similarity_kernel_matrices(dataset):
     """
     Computes the drug-drug and protein-protein kernel matrices for kernel-based methods (e.g. Kron-RLS)
@@ -444,8 +445,8 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
     all_prots = set()
     pair_to_value_y = {}
     Mgraph = nx.Graph(name='drug_target_network')
-    Mrows = defaultdict(lambda: list())
-    Mcols = defaultdict(lambda: list())
+    Mrows = defaultdict(list)
+    Mcols = defaultdict(list)
     for x, y, w, id in tqdm(dataset.itersamples()):
         mol, prot = x
         all_comps.add(mol)
@@ -503,7 +504,7 @@ def compute_simboost_drug_target_features(dataset, mf_simboost_data_dict, nbins=
     cls_cent = nx.closeness_centrality(Mgraph)
     # eig_cent = nx.eigenvector_centrality(Mgraph, tol=1e-3, max_iter=500)
     # pagerank = nx.pagerank(Mgraph, tol=1e-3, max_iter=1000)
-    drug_target_feats_dict = defaultdict(lambda: list())
+    drug_target_feats_dict = defaultdict(list)
     vec_lengths = []
 
     # Retrieve data from the Matrix Factorization stage
@@ -578,7 +579,7 @@ def compute_type1_features(M, all_E, Edict, nbins):
     :return:
         A dict of entity-feature elements
     """
-    feats_dict = defaultdict(lambda: list())
+    feats_dict = defaultdict(list)
     for entity in all_E:
         feat = feats_dict[entity]
         # n.obs
@@ -606,7 +607,7 @@ def compute_type2_features(type1_feats_dict, Edict, Egraph):
     :return:
         A dict of entity-feature elements
     """
-    feats_dict = defaultdict(lambda: list())
+    feats_dict = defaultdict(list)
     btw_cent = nx.betweenness_centrality(Egraph)
     cls_cent = nx.closeness_centrality(Egraph)
     eig_cent = nx.eigenvector_centrality(Egraph, tol=1e-5, max_iter=200)
@@ -697,7 +698,7 @@ def compute_train_val_test_kronrls_mats(train, val, test, Kd_dict, Kt_dict):
     train_mol = set()
     train_prot = set()
     labels = defaultdict(lambda: np.nan)
-    weights = defaultdict(lambda: float())
+    weights = defaultdict(float)
     for x, y, w, _ in train.itersamples():
         mol, prot = x
         train_mol.add(mol)
@@ -720,8 +721,8 @@ def compute_train_val_test_kronrls_mats(train, val, test, Kd_dict, Kt_dict):
     # Construct validation set matrix
     val_mol = set()
     val_prot = set()
-    labels_val = defaultdict(lambda: float())
-    weights_val = defaultdict(lambda: float())
+    labels_val = defaultdict(float)
+    weights_val = defaultdict(float)
     for x, y, w, _ in val.itersamples():
         dx, tx = x
         val_mol.add(dx)
@@ -736,8 +737,8 @@ def compute_train_val_test_kronrls_mats(train, val, test, Kd_dict, Kt_dict):
     # Construct test set matrix
     test_mol = set()
     test_prot = set()
-    labels_test = defaultdict(lambda: float())
-    weights_test = defaultdict(lambda: float())
+    labels_test = defaultdict(float)
+    weights_test = defaultdict(float)
     for x, y, w, _ in test.itersamples():
         dx, tx = x
         test_mol.add(dx)

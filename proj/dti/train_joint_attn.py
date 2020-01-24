@@ -263,12 +263,13 @@ class Jova(Trainer):
                                      batch_size=1 if hparams["explain_mode"] else hparams["val_batch_size"],
                                      shuffle=False,
                                      collate_fn=lambda x: x)
-        test_data_loader = None
         if test_dataset is not None:
             test_data_loader = DataLoader(dataset=test_dataset,
                                           batch_size=1 if hparams["explain_mode"] else hparams["test_batch_size"],
                                           shuffle=False,
                                           collate_fn=lambda x: x)
+        else:
+            test_data_loader = val_data_loader
 
         # optimizer configuration
         optimizer = {
@@ -645,7 +646,7 @@ class Jova(Trainer):
     def explain_model(model, model_dir, model_name, data_loaders, transformers_dict, prot_desc_dict, prot_model_types,
                       sim_data_node, max_print=10, k=10):
         # load saved model and put in evaluation mode
-        model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc=torch.device("cuda:0")))
+        model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc=torch.device(f"cuda:{dvc_id}")))
         model.eval()
 
         print("Model explanation...")
@@ -782,6 +783,7 @@ def main(pid, flags):
                                  'pviews': '-'.join(views_reg.p_views),
                                  'split': split_label,
                                  'mode': mode,
+                                 'cv': str(flags['cv']),
                                  'seeds': '-'.join([str(s) for s in seeds]),
                                  'date': date_label})
         sim_data = DataNode(label=node_label)
@@ -921,7 +923,7 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
                        transformers_dict, view, protein_profile, protein_embeddings, prot_vocab, k, tb_writer)
     else:
         start_fold(data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,
-                   transformers_dict, view, protein_profile, protein_embeddings, prot_vocab, tb_writer)
+                   transformers_dict, view, protein_profile, protein_embeddings, prot_vocab, tb_writer=tb_writer)
 
 
 def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, tasks, trainer,

@@ -45,7 +45,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
 seeds = [1, 8, 64]
 
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 
 
 def create_ecfp_net(hparams):

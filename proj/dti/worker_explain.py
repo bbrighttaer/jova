@@ -96,9 +96,30 @@ def retrieve_resource_cv(k, seeds, r_name, r_data, res_names):
     return {k: query_results[k] for k in query_results}
 
 
+def retrieve_resource(seeds, r_name, r_data, res_names):
+    """
+    Aggregates train-validation data for analysis.
+
+    :param seeds: A list of seeds used for the simulation.
+    :param r_name: The name of the root resource.
+    :param r_data: The json data.
+    :param res_names: A list resource(s) under each fold to be retrieved.
+                      Each record is a tuple of (leave resource path, index of resource path under the given CV fold)
+    :return: A dict of the aggregated resources across seeds and folds.
+    """
+    query_results = dict()
+    for res, idx in res_names:
+        query_results[res] = []
+        for i, seed in enumerate(seeds):
+            path = "{}/{}/seed_{}/{}/{}".format(r_name, i, seed, idx, res)
+            r = get_resource(path, r_data)
+            query_results[res].append(r)
+    return {k: query_results[k] for k in query_results}
+
+
 if __name__ == '__main__':
-    folder = "analysis"
-    qualifier = "davis_integrated_view_attn_no_gan_rnn_psc_ecfp8_gconv_warm_explain_2019_12_30__22_31_14"
+    folder = "analysis/case_study"
+    qualifier = "kiba"
     files = list(filter(lambda f: qualifier in f and '.json' in f, os.listdir(folder)))
     print('Number of files loaded=', len(files))
     files.sort()
@@ -110,10 +131,19 @@ if __name__ == '__main__':
             data = json.load(f)
 
         root_name = file.split(".j")[0]
-        data_dict = retrieve_resource_cv(k=5, seeds=[123, 124, 125], r_name=root_name, r_data=data,
-                                         res_names=[
-                                             ("attn_ranking", 0),
-                                         ])
+        metadata = json.loads(root_name)
+        seeds = [eval(s) for s in metadata['seeds'].split('-')]
+        cv = eval(metadata['cv'])
+        if cv:
+            data_dict = retrieve_resource_cv(k=5, seeds=seeds, r_name=root_name, r_data=data,
+                                             res_names=[
+                                                 ("attn_ranking", 0),
+                                             ])
+        else:
+            data_dict = retrieve_resource(seeds=seeds, r_name=root_name, r_data=data,
+                                          res_names=[
+                                              ("attn_ranking", 0),
+                                          ])
         attention_data = data_dict['attn_ranking']
         with open(os.path.join(results_folder, root_name + '.csv'), 'a') as f:
             writer = csv.DictWriter(f, None)

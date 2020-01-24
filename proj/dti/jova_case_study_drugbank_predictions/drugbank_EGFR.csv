@@ -1,0 +1,32 @@
+DRUGBANK ID,NAME,DRUG GROUP,PHARMACOLOGICAL ACTION?,ACTIONS
+DB00002,Cetuximab,approved,yes,antagonist
+DB00317,Gefitinib,"approved, investigational",yes,antagonist
+DB00530,Erlotinib,"approved, investigational",yes,antagonist
+DB01259,Lapatinib,"approved, investigational",yes,antagonist
+DB01269,Panitumumab,"approved, investigational",yes,suppressor
+DB00281,Lidocaine,"approved, vet_approved",unknown,antagonist
+DB03496,Alvocidib,"experimental, investigational",unknown,
+DB00072,Trastuzumab,"approved, investigational",unknown,
+DB04988,IGN311,investigational,unknown,
+DB05294,Vandetanib,approved,unknown,inhibitor
+DB05374,Rindopepimut,investigational,unknown,
+DB05101,Matuzumab,investigational,unknown,
+DB05424,Canertinib,investigational,unknown,
+DB05944,Varlitinib,investigational,unknown,
+DB06021,AV-412,investigational,unknown,
+DB05524,Pelitinib,investigational,unknown,
+DB07602,S-{3-[(4-ANILINOQUINAZOLIN-6-YL)AMINO]-3-OXOPROPYL}-L-CYSTEINE,experimental,unknown,
+DB07662,N-[4-(3-BROMO-PHENYLAMINO)-QUINAZOLIN-6-YL]-ACRYLAMIDE,experimental,unknown,
+DB08916,Afatinib,approved,yes,inhibitor
+DB09559,Necitumumab,"approved, investigational",yes,antagonist
+DB09330,Osimertinib,approved,yes,inhibitor
+DB11737,Icotinib,"experimental, investigational",unknown,antagonist
+DB13164,Olmutinib,investigational,yes,inhibitor
+DB12202,Zalutumumab,investigational,yes,antagonist
+DB11731,Depatuxizumab mafodotin,investigational,no,antibody
+DB11828,Neratinib,"approved, investigational",yes,inhibitor
+DB12267,Brigatinib,"approved, investigational",yes,inhibitor
+DB10772,Foreskin keratinocyte (neonatal),approved,yes,agonist
+DB12010,Fostamatinib,"approved, investigational",unknown,inhibitor
+DB11963,Dacomitinib,"approved, investigational",yes,inhibitor
+DB15035,Zanubrutinib,"approved, investigational",unknown,inhibitor

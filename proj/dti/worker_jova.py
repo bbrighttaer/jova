@@ -86,8 +86,8 @@ if __name__ == '__main__':
     aggregation_dict = defaultdict(lambda: pd.DataFrame({'model': [], 'split': [], 'metric': [], 'value': [],
                                                          'stdev': [], 'mode': [], 'date': [], 'seeds': []}))
     chart_type = "png"
-    folder = "analysis/davis/eval/jova"
-    qualifier = 'davis'
+    folder = "analysis/kiba/eval/baselines"
+    qualifier = 'kiba'
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
     print('Number of files loaded=', len(files))
     files.sort()
@@ -134,8 +134,8 @@ if __name__ == '__main__':
             os.makedirs(results_folder, exist_ok=True)
 
         # calculate avg rms
-        rms_mean = data_dict["validation_metrics/nanmean-rms_score"].mean()
-        rms_std = data_dict["validation_metrics/nanmean-rms_score"].std()
+        rms_mean = np.nanmean(data_dict["validation_metrics/nanmean-rms_score"])
+        rms_std = np.nanstd(data_dict["validation_metrics/nanmean-rms_score"])
         rms_mean_std = "RMSE: mean={:.4f}, std={:.3f}".format(rms_mean, rms_std)
         dataframe = dataframe.append({'model': model,
                                       'split': split,
@@ -145,14 +145,12 @@ if __name__ == '__main__':
                                       'mode': mode,
                                       'date': date,
                                       'seeds': metadata['seeds']}, ignore_index=True)
-        if model == 'KronRLS':
-            print(model)
         aggregation_dict[metadata['dataset']] = dataframe
         print('\t', rms_mean_std)
 
         # calculate avg ci
-        ci_mean = data_dict["validation_metrics/nanmean-concordance_index"].mean()
-        ci_std = data_dict["validation_metrics/nanmean-concordance_index"].std()
+        ci_mean = np.nanmean(data_dict["validation_metrics/nanmean-concordance_index"])
+        ci_std = np.nanstd(data_dict["validation_metrics/nanmean-concordance_index"])
         ci_mean_std = "CI: mean={:.4f}, std={:.3f}".format(ci_mean, ci_std)
         dataframe = dataframe.append({'model': model,
                                       'split': split,
@@ -166,8 +164,8 @@ if __name__ == '__main__':
         print('\t', ci_mean_std)
 
         # calculate avg r2
-        r2_mean = data_dict["validation_metrics/nanmean-pearson_r2_score"].mean()
-        r2_std = data_dict["validation_metrics/nanmean-pearson_r2_score"].std()
+        r2_mean = np.nanmean(data_dict["validation_metrics/nanmean-pearson_r2_score"])
+        r2_std = np.nanstd(data_dict["validation_metrics/nanmean-pearson_r2_score"])
         r2_mean_std = "R2: mean={:.4f}, std={:.3f}".format(r2_mean, r2_std)
         dataframe = dataframe.append({'model': model,
                                       'split': split,

@@ -1,0 +1,81 @@
+DRUGBANK ID,NAME,DRUG GROUP,PHARMACOLOGICAL ACTION?,ACTIONS
+DB00499,Flutamide,"approved, investigational",yes,antagonist
+DB00621,Oxandrolone,"approved, investigational",yes,agonist
+DB00624,Testosterone,"approved, investigational",yes,agonist
+DB00984,Nandrolone phenpropionate,"approved, illicit, investigational",yes,agonist
+DB01128,Bicalutamide,approved,yes,antagonist
+DB00858,Drostanolone,illicit,yes,agonist
+DB01185,Fluoxymesterone,"approved, illicit",yes,agonist
+DB00665,Nilutamide,"approved, investigational",yes,antagonist
+DB01481,1-Testosterone,"experimental, illicit, investigational",yes,agonist
+DB01541,Boldenone,"illicit, vet_approved",yes,agonist
+DB04839,Cyproterone acetate,"approved, investigational",yes,antagonist
+DB01564,Calusterone,"experimental, illicit",yes,
+DB05234,LGD2941,investigational,unknown,
+DB02901,Stanolone,"illicit, investigational",unknown,
+DB06412,Oxymetholone,"approved, illicit",yes,agonistactivator
+DB01395,Drospirenone,approved,yes,antagonist
+DB01406,Danazol,approved,yes,agonist
+DB06870,"17-HYDROXY-18A-HOMO-19-NOR-17ALPHA-PREGNA-4,9,11-TRIEN-3-ONE",experimental,unknown,
+DB02932,(R)-Bicalutamide,experimental,unknown,
+DB07039,(2S)-N-(4-cyano-3-iodophenyl)-3-(4-cyanophenoxy)-2-hydroxy-2-methylpropanamide,experimental,unknown,
+DB07286,BMS-564929,experimental,unknown,
+DB07419,S-23,experimental,unknown,
+DB07421,"4-{[(1R,2S)-1,2-dihydroxy-2-methyl-3-(4-nitrophenoxy)propyl]amino}-2-(trifluoromethyl)benzonitrile",experimental,unknown,
+DB07422,(2S)-2-hydroxy-2-methyl-N-[4-nitro-3-(trifluoromethyl)phenyl]-3-(pentafluorophenoxy)propanamide,experimental,unknown,
+DB07423,(2S)-3-[4-(acetylamino)phenoxy]-2-hydroxy-2-methyl-N-[4-nitro-3-(trifluoromethyl)phenyl]propanamide,experimental,unknown,
+DB07454,(R)-3-BROMO-2-HYDROXY-2-METHYL-N-[4-NITRO-3-(TRIFLUOROMETHYL)PHENYL]PROPANAMIDE,experimental,unknown,
+DB07717,"(5S,8R,9S,10S,13R,14S,17S)-13-{2-[(3,5-DIFLUOROBENZYL)OXY]ETHYL}-17-HYDROXY-10-METHYLHEXADECAHYDRO-3H-CYCLOPENTA[A]PHENANTHREN-3-ONE",experimental,unknown,
+DB07769,S-3-(4-FLUOROPHENOXY)-2-HYDROXY-2-METHYL-N-[4-NITRO-3-(TRIFLUOROMETHYL)PHENYL]PROPANAMIDE,experimental,unknown,
+DB02266,Flufenamic acid,approved,unknown,
+DB04709,"(3AALPHA,4ALPHA,7ALPHA,7AALPHA)- 3A,4,7,7A-TETRAHYDRO-2-(4-NITRO-1-NAPHTHALENYL)-4,7-ETHANO-1H-ISOINDOLE-1,3(2H)-DIONE",experimental,unknown,
+DB08035,"1-TERT-BUTYL-3-(2,5-DIMETHYLBENZYL)-1H-PYRAZOLO[3,4-D]PYRIMIDIN-4-AMINE",experimental,unknown,
+DB08087,"4-[(7R,7AS)-7-HYDROXY-1,3-DIOXOTETRAHYDRO-1H-PYRROLO[1,2-C]IMIDAZOL-2(3H)-YL]-1-NAPHTHONITRILE",experimental,unknown,
+DB08088,"2-chloro-4-{[(1R,3Z,7S,7aS)-7-hydroxy-1-(trifluoromethyl)tetrahydro-1H-pyrrolo[1,2-c][1,3]oxazol-3-ylidene]amino}-3-methylbenzonitrile",experimental,unknown,
+DB08089,LGD-2226,experimental,unknown,
+DB02998,Metribolone,experimental,unknown,
+DB08461,"3-[(4-AMINO-1-TERT-BUTYL-1H-PYRAZOLO[3,4-D]PYRIMIDIN-3-YL)METHYL]PHENOL",experimental,unknown,
+DB08804,Nandrolone decanoate,"approved, illicit",yes,agonist
+DB01420,Testosterone propionate,"approved, investigational, vet_approved, withdrawn",yes,agonist
+DB06710,Methyltestosterone,approved,yes,agonist
+DB00367,Levonorgestrel,"approved, investigational",unknown,binder
+DB00421,Spironolactone,approved,unknown,antagonist
+DB08867,Ulipristal,approved,unknown,
+DB08899,Enzalutamide,approved,yes,inhibitor
+DB01026,Ketoconazole,"approved, investigational",unknown,binder
+DB09389,Norgestrel,approved,unknown,agonist
+DB01708,Prasterone,"approved, investigational, nutraceutical",unknown,agonist
+DB13155,Esculin,approved,unknown,agonist
+DB00655,Estrone,approved,unknown,
+DB11429,Mibolerone,vet_approved,unknown,
+DB00675,Tamoxifen,approved,unknown,
+DB01428,Oxybenzone,"approved, investigational",unknown,antagonist
+DB11219,Enzacamene,approved,unknown,antagonist
+DB11064,Homosalate,"approved, investigational",unknown,antagonist
+DB00255,Diethylstilbestrol,"approved, investigational",unknown,antagonist
+DB06713,Norelgestromin,"approved, investigational",unknown,partial agonist
+DB00957,Norgestimate,"approved, investigational",unknown,partial agonist
+DB01063,Acetophenazine,approved,unknown,
+DB00623,Fluphenazine,approved,unknown,
+DB01608,Periciazine,"approved, investigational",unknown,
+DB11447,Phenothiazine,"experimental, vet_approved",unknown,
+DB09086,Eugenol,approved,unknown,antagonist
+DB09371,Norethynodrel,approved,unknown,
+DB00396,Progesterone,"approved, vet_approved",unknown,agonistpotentiator
+DB08604,Triclosan,"approved, investigational",unknown,
+DB00648,Mitotane,approved,unknown,antagonist
+DB09123,Dienogest,approved,yes,antagonist
+DB13934,Ligandrol,investigational,unknown,antagonistagonist
+DB13943,Testosterone cypionate,approved,yes,agonist
+DB13944,Testosterone enanthate,approved,yes,agonist
+DB13946,Testosterone undecanoate,"approved, investigational",yes,agonist
+DB13951,Stanolone acetate,experimental,unknown,
+DB11901,Apalutamide,"approved, investigational",yes,antagonist
+DB11619,Gestrinone,approved,unknown,antagonist
+DB06133,Dimethylcurcumin,investigational,yes,inhibitor
+DB14583,Segesterone acetate,"approved, experimental, investigational",no,agonist
+DB14639,Boldenone undecylenate,"illicit, vet_approved",yes,
+DB06718,Stanozolol,"approved, vet_approved",yes,agonist
+DB15488,Echinacoside,experimental,unknown,agonist
+DB00717,Norethisterone,approved,unknown,agonist
+DB12941,Darolutamide,"approved, investigational",yes,antagonist
