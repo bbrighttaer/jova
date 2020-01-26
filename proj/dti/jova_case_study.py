@@ -392,7 +392,7 @@ class Jova(Trainer):
                 transformer = transformers_dict[list(Xs.keys())[0]]
                 rank_results = {'y_pred': np_to_plot_data(undo_transforms(y_predicted.cpu().detach().numpy(),
                                                                           transformer)),
-                                'y_true': np_to_plot_data(undo_transforms(y_true, transformer)),
+                                'y_true': np_to_plot_data(y_true),
                                 'attn_ranking': joint_attention_data.get_rankings(k)}
                 attn_ranking.append(rank_results)
         # End of mini=batch iterations.

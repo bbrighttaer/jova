@@ -118,8 +118,8 @@ def retrieve_resource(seeds, r_name, r_data, res_names):
 
 
 if __name__ == '__main__':
-    folder = "analysis/case_study"
-    qualifier = "kiba"
+    folder = "analysis/egfr_cs"
+    qualifier = "unfiltered"
     files = list(filter(lambda f: qualifier in f and '.json' in f, os.listdir(folder)))
     print('Number of files loaded=', len(files))
     files.sort()
