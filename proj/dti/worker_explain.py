@@ -119,7 +119,7 @@ def retrieve_resource(seeds, r_name, r_data, res_names):
 
 if __name__ == '__main__':
     folder = "analysis/egfr_cs"
-    qualifier = "unfiltered"
+    qualifier = "egfr_1M17"
     files = list(filter(lambda f: qualifier in f and '.json' in f, os.listdir(folder)))
     print('Number of files loaded=', len(files))
     files.sort()

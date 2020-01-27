@@ -46,7 +46,8 @@ def load_prot_dict(prot_desc_dict, prot_seq_dict, prot_desc_path,
         source = 'human'
     elif re.search('celegans', prot_desc_path, re.I):
         source = 'celegans'
-    elif re.search('egfr_case_study', prot_desc_path, re.I) or re.search('egfr_unfiltered', prot_desc_path, re.I):
+    elif re.search('egfr_case_study', prot_desc_path, re.I) or re.search('egfr_unfiltered', prot_desc_path, re.I) \
+            or re.search('egfr_1M17', prot_desc_path, re.I):
         source = 'egfr_cs'
 
     df = pd.read_csv(prot_desc_path, index_col=0)
