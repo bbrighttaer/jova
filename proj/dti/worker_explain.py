@@ -122,6 +122,7 @@ if __name__ == '__main__':
     qualifier = "egfr_1M17"
     files = list(filter(lambda f: qualifier in f and '.json' in f, os.listdir(folder)))
     print('Number of files loaded=', len(files))
+    seq_offset = 0
     files.sort()
     results_folder = "results_" + folder + '_explain'
     os.makedirs(results_folder, exist_ok=True)
@@ -187,7 +188,7 @@ if __name__ == '__main__':
                                                 seg += trigram[-1]  # since they overlap
                                     offset = sequence.index(seg)
                                     for r, res in enumerate(seg):
-                                        seg_res += aac_one_to_three_dict[res] + str(offset + r + 1) + ' '
+                                        seg_res += aac_one_to_three_dict[res] + str(offset + r + 1 + seq_offset) + ' '
                                     _tps.append(seg)
                                     _tps_res.append(seg_res.strip())
                                 top_segments = _tps
