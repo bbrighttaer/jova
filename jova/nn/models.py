@@ -899,7 +899,7 @@ class JointAttention(nn.Module):
         self.activation = get_activation_func(activation)
         self.dropout = nn.Dropout(dprob)
         self.batch_norm = nn.BatchNorm1d(latent_dim * len(d_dims))
-        self.attn_bn = nn.BatchNorm1d(latent_dim)
+        self.attn_norm = nn.LayerNorm(latent_dim)  # nn.BatchNorm1d(latent_dim)
 
     @classmethod
     def _pad_tensors(cls, c, contexts):
@@ -931,10 +931,11 @@ class JointAttention(nn.Module):
             if self.attn_hook:
                 self.attn_hook(i, x, x_prime, wts, num_segs)
 
-            # residual connection (segment-wise)
+            # residual connection and norm (segment-wise)
             x_add = x + x_prime
-            x = self.attn_bn(x_add.view(shape[0] * shape[1], shape[2]))
-            x = x.view(*shape)
+            x = self.attn_norm(x_add)
+            # x = self.attn_norm(x_add.view(shape[0] * shape[1], shape[2]))
+            # x = x.view(*shape)
 
             # FFN res block - sub-module 2
             x = res_net(x)
@@ -981,7 +982,7 @@ class SegmentWiseResBlock(nn.Module):
 
     def __init__(self, d_model, activation='relu', inner_layer_dim=2048):
         super(SegmentWiseResBlock, self).__init__()
-        self.batch_norm = nn.BatchNorm1d(d_model)
+        self.normalize = nn.LayerNorm(d_model)  # nn.BatchNorm1d(d_model)
         self.seg_lin = SegmentWiseLinear(d_model, activation, inner_layer_dim)
 
     def forward(self, x):
@@ -992,7 +993,7 @@ class SegmentWiseResBlock(nn.Module):
         """
         num_seg, bsize, d_model = x.shape
         x = x + self.seg_lin(x)
-        x = self.batch_norm(x.view(num_seg * bsize, d_model)).view(num_seg, bsize, d_model)
+        x = self.normalize(x)  # self.normalize(x.view(num_seg * bsize, d_model)).view(num_seg, bsize, d_model)
         return x
 
 

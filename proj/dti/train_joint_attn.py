@@ -24,6 +24,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from soek import *
+from soek.bopt import GPMinArgs
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -862,28 +863,28 @@ def main(pid, flags):
                     hparams_conf = get_hparam_config(flags)
 
                     if hparam_search is None:
-                        search_alg = {"random_search": RandomSearchCV,
-                                      "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
-                                                                                BayesianOptSearchCV)
-                        min_opt = "gbrt"
+                        search_alg = {"random_search": RandomSearch,
+                                      "bayopt_search": BayesianOptSearch}.get(flags["hparam_search_alg"],
+                                                                                BayesianOptSearch)
+                        search_args = GPMinArgs(n_calls=20, random_state=seed)
                         hparam_search = search_alg(hparam_config=hparams_conf,
                                                    num_folds=k,
                                                    initializer=trainer.initialize,
                                                    data_provider=trainer.data_provider,
                                                    train_fn=trainer.train,
                                                    save_model_fn=jova.utils.io.save_model,
+                                                   alg_args=search_alg,
                                                    init_args=extra_init_args,
                                                    data_args=extra_data_args,
                                                    train_args=extra_train_args,
                                                    data_node=data_node,
                                                    split_label=split_label,
                                                    sim_label=sim_label,
-                                                   minimizer=min_opt,
                                                    dataset_label=dataset_lbl,
-                                                   results_file="{}_{}_dti_{}_{}.csv".format(
-                                                       flags["hparam_search_alg"], sim_label, date_label, min_opt))
+                                                   results_file="{}_{}_dti_{}.csv".format(
+                                                       flags["hparam_search_alg"], sim_label, date_label))
 
-                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
+                    stats = hparam_search.fit(model_dir="models", model_name="".join(tasks))
                     print(stats)
                     print("Best params = {}".format(stats.best()))
                 else:
