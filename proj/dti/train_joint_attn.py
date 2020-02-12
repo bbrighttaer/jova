@@ -907,6 +907,9 @@ def invoke_train(trainer, tasks, data_dict, transformers_dict, flags, prot_desc_
             raise FileNotFoundError(f'{hfile} not found')
         hyper_params = parse_hparams(hfile)
         hyper_params['explain_mode'] = flags.explain
+        # hyper_params['tr_batch_size'] = 8
+        # hyper_params['val_batch_size'] = 8
+        # hyper_params['test_batch_size'] = 8
         hyper_params['gnn']['fingerprint_size'] = len(flags["gnn_fingerprint"]) \
             if flags["gnn_fingerprint"] is not None else 0
     except:
