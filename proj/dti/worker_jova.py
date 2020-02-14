@@ -86,7 +86,7 @@ if __name__ == '__main__':
     aggregation_dict = defaultdict(lambda: pd.DataFrame({'model': [], 'split': [], 'metric': [], 'value': [],
                                                          'stdev': [], 'mode': [], 'date': [], 'seeds': []}))
     chart_type = "png"
-    folder = "analysis/kiba/eval/baselines"
+    folder = "analysis/kiba/eval/jova"
     qualifier = 'kiba'
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
     print('Number of files loaded=', len(files))
