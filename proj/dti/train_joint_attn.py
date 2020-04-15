@@ -866,14 +866,14 @@ def main(pid, flags):
                         search_alg = {"random_search": RandomSearch,
                                       "bayopt_search": BayesianOptSearch}.get(flags["hparam_search_alg"],
                                                                                 BayesianOptSearch)
-                        search_args = GPMinArgs(n_calls=20, random_state=seed)
+                        search_args = GPMinArgs(n_calls=40, random_state=seed)
                         hparam_search = search_alg(hparam_config=hparams_conf,
                                                    num_folds=k,
                                                    initializer=trainer.initialize,
                                                    data_provider=trainer.data_provider,
                                                    train_fn=trainer.train,
                                                    save_model_fn=jova.utils.io.save_model,
-                                                   alg_args=search_alg,
+                                                   alg_args=search_args,
                                                    init_args=extra_init_args,
                                                    data_args=extra_data_args,
                                                    train_args=extra_train_args,
@@ -1078,11 +1078,11 @@ def default_hparams_bopt(flags):
 def get_hparam_config(flags):
     config = {
         "explain_mode": ConstantParam(flags.explain),
-        "attn_heads": CategoricalParam([1, 2, 4, 8, 16]),
+        "attn_heads": CategoricalParam([1, 2, 4, 8]),
         "attn_layers": DiscreteParam(min=1, max=3),
         "lin_dims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=3)),
         "output_dim": ConstantParam(len(flags.tasks)),
-        "latent_dim": CategoricalParam(choices=[256, 512]),
+        "latent_dim": CategoricalParam(choices=[16, 32, 64, 128, 256]),
 
         # weight initialization
         "kaiming_constant": ConstantParam(5),
