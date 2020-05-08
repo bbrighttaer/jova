@@ -24,8 +24,7 @@
 *.npy
 
 # analysis plots
-proj/**/analysis/**/*.pdf
-proj/**/analysis/**/*.png
+proj/**/analysis/
 
 proj/**/analysis/**/*.txt
 

@@ -1,3 +1,0 @@
-RMSE: mean=0.6980, std=0.182
-CI: mean=0.7393, std=0.046
-R2: mean=0.4075, std=0.141
