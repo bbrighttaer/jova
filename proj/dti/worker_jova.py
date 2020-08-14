@@ -86,8 +86,8 @@ if __name__ == '__main__':
     aggregation_dict = defaultdict(lambda: pd.DataFrame({'model': [], 'split': [], 'metric': [], 'value': [],
                                                          'stdev': [], 'mode': [], 'date': [], 'seeds': []}))
     chart_type = "png"
-    folder = "analysis/kiba/eval/jova"
-    qualifier = 'kiba'
+    folder = "analysis/davis/eval/baselines"
+    qualifier = 'davis'
     files = [f for f in os.listdir(folder) if qualifier in f and ".json" in f]
     print('Number of files loaded=', len(files))
     files.sort()
@@ -178,8 +178,18 @@ if __name__ == '__main__':
         aggregation_dict[metadata['dataset']] = dataframe
         print('\t', r2_mean_std)
 
-        with open(os.path.join(results_folder, root_name + '.txt'), "w") as txt_file:
-            txt_file.writelines([rms_mean_std + '\n', ci_mean_std + '\n', r2_mean_std])
+        # with open(os.path.join(results_folder, root_name + '.txt'), "w") as txt_file:
+        #     txt_file.writelines([rms_mean_std + '\n', ci_mean_std + '\n', r2_mean_std])
+
+        root_name = eval(root_name)
+        if 'cviews' in root_name:
+            root_name = '_'.join([root_name['dataset'], root_name['model_family'], root_name['cviews'],
+                                  root_name['pviews'], root_name['split']])
+        elif 'cview' in root_name:
+            root_name = '_'.join([root_name['dataset'], root_name['model_family'], root_name['cview'],
+                                  root_name['pview'], root_name['split']])
+        else:
+            root_name = '_'.join([root_name['dataset'], root_name['model_family'], root_name['split']])
 
         # plot and save prediction and joint plots for this root to file (w.r.t data set).
         fig, ax = plt.subplots()
@@ -197,34 +207,34 @@ if __name__ == '__main__':
         # f1.set(xlabel="predicted value", ylabel="true value")
         fig.savefig("./{}/{}_true-vs-pred.{}".format(results_folder, root_name, chart_type))
 
-        sns.set_style("white")
-        f2 = sns.jointplot(x="predicted value", y="true value", data=data, kind='kde')  # , stat_func=pearsonr)
-        # f2.annotate(pearsonr)
-        # f2.set_axis_labels("predicted value", "true value")
-        f2.savefig("./{}/{}_joint.{}".format(results_folder, root_name, chart_type))
-        plt.close('all')
-
-        # plot neighborhood histogram
-        # plt.title(title)
-        array_h1, array_v1 = np.meshgrid(y_true, y_true)
-        array_nvals1 = np.sort(np.abs(array_v1 - array_h1), axis=1)[:, 1:]
-        plt.hist(array_nvals1.reshape(-1, ), bins=20, label='Ground truth', alpha=0.5)
-
-        array_h2, array_v2 = np.meshgrid(y_pred, y_pred)
-        array_nvals2 = np.sort(np.abs(array_v2 - array_h2), axis=1)[:, 1:]
-        plt.hist(array_nvals2.reshape(-1, ), bins=20, label='Predicted', alpha=0.5)
-
-        plt.legend(loc='best')
-        plt.savefig(os.path.join(results_folder, root_name + 'neighborhood.' + chart_type))
-        plt.close('all')
-
-        # Distribution plot of the same neighborhood distances
-        sns.set(color_codes=True)
-        sns.set_style('ticks')
-        sns.kdeplot(array_nvals1.reshape(-1, ), shade=True, label='Ground truth')
-        sns.kdeplot(array_nvals2.reshape(-1, ), shade=True, label='Predicted')
-        sns.despine(offset=5, trim=True)
-        plt.savefig(os.path.join(results_folder, root_name + 'neighborhood_kde.' + chart_type))
+        # sns.set_style("white")
+        # f2 = sns.jointplot(x="predicted value", y="true value", data=data, kind='kde')  # , stat_func=pearsonr)
+        # # f2.annotate(pearsonr)
+        # # f2.set_axis_labels("predicted value", "true value")
+        # f2.savefig("./{}/{}_joint.{}".format(results_folder, root_name, chart_type))
+        # plt.close('all')
+        #
+        # # plot neighborhood histogram
+        # # plt.title(title)
+        # array_h1, array_v1 = np.meshgrid(y_true, y_true)
+        # array_nvals1 = np.sort(np.abs(array_v1 - array_h1), axis=1)[:, 1:]
+        # plt.hist(array_nvals1.reshape(-1, ), bins=20, label='Ground truth', alpha=0.5)
+        #
+        # array_h2, array_v2 = np.meshgrid(y_pred, y_pred)
+        # array_nvals2 = np.sort(np.abs(array_v2 - array_h2), axis=1)[:, 1:]
+        # plt.hist(array_nvals2.reshape(-1, ), bins=20, label='Predicted', alpha=0.5)
+        #
+        # plt.legend(loc='best')
+        # plt.savefig(os.path.join(results_folder, root_name + 'neighborhood.' + chart_type))
+        # plt.close('all')
+        #
+        # # Distribution plot of the same neighborhood distances
+        # sns.set(color_codes=True)
+        # sns.set_style('ticks')
+        # sns.kdeplot(array_nvals1.reshape(-1, ), shade=True, label='Ground truth')
+        # sns.kdeplot(array_nvals2.reshape(-1, ), shade=True, label='Predicted')
+        # sns.despine(offset=5, trim=True)
+        # plt.savefig(os.path.join(results_folder, root_name + 'neighborhood_kde.' + chart_type))
 
         plt.close('all')
 

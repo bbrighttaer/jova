@@ -23,6 +23,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim.lr_scheduler as sch
 from soek import *
+from soek.bopt import GPMinArgs
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -47,7 +48,7 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 seeds = [1, 8, 64]
 check_data = False
 
-torch.cuda.set_device(0)
+torch.cuda.set_device(2)
 
 use_weave = False
 use_gconv = True
@@ -543,7 +544,7 @@ def main(pid, flags):
                              'mode': "eval" if flags["eval"] else "train",
                              'seeds': '-'.join([str(s) for s in seeds]),
                              'date': date_label})
-    sim_data = DataNode(label=node_label)
+    sim_data = DataNode(label=''.join([sim_label, dataset_lbl, split_label, date_label]), metadata=node_label)
     nodes_list = []
     sim_data.data = nodes_list
 
@@ -622,9 +623,10 @@ def main(pid, flags):
                 hparams_conf = get_hparam_config(flags)
 
                 if hparam_search is None:
-                    search_alg = {"random_search": RandomSearchCV,
-                                  "bayopt_search": BayesianOptSearchCV}.get(flags["hparam_search_alg"],
-                                                                            BayesianOptSearchCV)
+                    search_alg = {"random_search": RandomSearch,
+                                  "bayopt_search": BayesianOptSearch}.get(flags["hparam_search_alg"],
+                                                                          BayesianOptSearch)
+                    search_args = GPMinArgs(n_calls=20)
                     min_opt = "gbrt"
                     hparam_search = search_alg(hparam_config=hparams_conf,
                                                num_folds=k,
@@ -635,6 +637,7 @@ def main(pid, flags):
                                                init_args=extra_init_args,
                                                data_args=extra_data_args,
                                                train_args=extra_train_args,
+                                               alg_args=search_args,
                                                data_node=data_node,
                                                split_label=split_label,
                                                sim_label=sim_label,
@@ -643,7 +646,7 @@ def main(pid, flags):
                                                results_file="{}_{}_dti_{}_{}.csv".format(
                                                    flags["hparam_search_alg"], sim_label, date_label, min_opt))
 
-                stats = hparam_search.fit(model_dir="models", model_name="".join(tasks), max_iter=20, seed=seed)
+                stats = hparam_search.fit()
                 print(stats)
                 print("Best params = {}".format(stats.best()))
             else:

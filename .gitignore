@@ -19,6 +19,8 @@
 *.pkl
 *.gzip
 
+data/**/*.json
+
 # saved model parameters
 *.mod
 *.npy
