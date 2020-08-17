@@ -26,8 +26,12 @@ data/**/*.json
 *.npy
 
 # analysis plots
-proj/**/analysis/**
+proj/**/analysis/**/*.png
+proj/**/analysis/**/*.jpg
+proj/**/analysis/**/*.jpeg
+proj/**/analysis/**/*.eps
 
+proj/**/analysis/**/*.txt
 
 # Generated files
 .idea/**/contentModel.xml
