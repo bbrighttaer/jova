@@ -1,0 +1,1 @@
+{"mf_kiba_warm_train_2020_01_12__06_40_18": [{"seed_1": [{"validation_metrics": {}}]}, {"seed_8": [{"validation_metrics": {}}]}, {"seed_64": [{"validation_metrics": {}}]}], "metadata": {"model_family": "mf", "dataset": "kiba", "cview": "ecfp8", "pview": "psc", "split": "warm", "seeds": "1-8-64", "mode": "train", "date": "2020_01_12__06_40_18"}}

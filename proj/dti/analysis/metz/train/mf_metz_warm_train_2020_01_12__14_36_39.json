@@ -1,0 +1,1 @@
+{"mf_metz_warm_train_2020_01_12__14_36_39": [{"seed_1": [{"validation_metrics": {}}]}, {"seed_8": [{"validation_metrics": {}}]}, {"seed_64": [{"validation_metrics": {}}]}], "metadata": {"pview": "psc", "dataset": "metz", "seeds": "1-8-64", "split": "warm", "date": "2020_01_12__14_36_39", "cview": "ecfp8", "model_family": "mf", "mode": "train"}}
