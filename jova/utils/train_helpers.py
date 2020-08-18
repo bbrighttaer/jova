@@ -376,3 +376,11 @@ def _rec_parse_hparams(p_dict):
         except NameError:
             hparams[k] = v
     return hparams
+
+
+def np_to_plot_data(y):
+    y = y.squeeze()
+    if y.shape == ():
+        return [float(y)]
+    else:
+        return y.squeeze().tolist()

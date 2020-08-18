@@ -37,7 +37,7 @@ from jova.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAt
 from jova.trans import undo_transforms
 from jova.utils import Trainer
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs, Flags
-from jova.utils.attn_helpers import MultimodalAttentionData
+from jova.utils.attn_helpers import AttentionDataService
 from jova.utils.io import load_pickle
 from jova.utils.train_helpers import count_parameters, FrozenModels, ViewsReg, parse_hparams
 
@@ -49,7 +49,7 @@ seeds = [1]
 dvc_id = 0
 torch.cuda.set_device(dvc_id)
 
-joint_attention_data = MultimodalAttentionData()
+joint_attention_data = AttentionDataService(True)
 
 views_reg = ViewsReg()
 
@@ -213,7 +213,7 @@ def create_integrated_net(hparams, protein_profile):
 
     layers = [NwayForward(models=views.values())]
 
-    func_callback = joint_attention_data.joint_attn_forward_hook if hparams["explain_mode"] else None
+    func_callback = joint_attention_data.attn_forward_hook if hparams["explain_mode"] else None
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"],
                                  attn_hook=func_callback))

@@ -778,9 +778,10 @@ class ProteinCNNAttention(ProteinCNN):
     All credits to the work above for the initial implementation which this implementation builds on.
     """
 
-    def __init__(self, dim, activation='relu', window=11, num_layers=3):
+    def __init__(self, dim, activation='relu', window=11, num_layers=3, attn_hook=None):
         super(ProteinCNNAttention, self).__init__(dim, window, activation, num_layers)
         self.W_attention = nn.Linear(dim, dim)
+        self.attn_hook = attn_hook
 
     def forward(self, prot_x, comp_x):
         """
@@ -805,8 +806,13 @@ class ProteinCNNAttention(ProteinCNN):
         wts = h_comp.bmm(h_prot.permute(0, 2, 1))
         attn_weights = torch.softmax(wts, dim=2)
         prot_out = attn_weights.permute(0, 2, 1) * h_prot
-        prot_out = torch.mean(prot_out, dim=1).reshape(len(prot_x), -1)
-        return prot_out
+        out = torch.mean(prot_out, dim=1).reshape(len(prot_x), -1)
+
+        if self.attn_hook:
+            self.attn_hook(0, prot_out.permute(1, 0, 2), torch.zeros_like(prot_out.permute(1, 0, 2)),
+                           attn_weights.view(prot_x.shape[0], -1), [prot_x.shape[1]])
+
+        return out
 
 
 class ProtCnnForward(nn.Module):
@@ -858,8 +864,11 @@ class TwoWayForward(nn.Module):
 
 class TwoWayAttention(nn.Module):
 
-    def __init__(self, dim1, dim2, activation=nonsat_activation):
+    def __init__(self, dim1, dim2, activation=nonsat_activation, attn_hook=None):
         super(TwoWayAttention, self).__init__()
+        if attn_hook:
+            assert callable(attn_hook), "Attention hook must be a function"
+        self.attn_hook = attn_hook
         self.activation = activation
         self.U = nn.Parameter(torch.empty((dim1, dim2)))
         init.xavier_normal_(self.U)
@@ -876,8 +885,24 @@ class TwoWayAttention(nn.Module):
         cols, _ = torch.max(M, dim=1, keepdim=True)
         cols = cols.view(batch_sz, 1, -1)
         cols = torch.softmax(cols, dim=2)
-        _x1 = rows.bmm(x1).squeeze()
-        _x2 = cols.bmm(x2).squeeze()
+        _x1 = rows.bmm(x1).view(batch_sz, -1)
+        _x2 = cols.bmm(x2).view(batch_sz, -1)
+
+        # merge protein and compound data for passing to attention hook
+        if self.attn_hook:
+            d = max(x1.shape[-1], x2.shape[-1])
+
+            # Gets number of segments in each view
+            num_segs = [x2.shape[1], x1.shape[1]]
+
+            m_x1 = F.pad(x1, [0, d - x1.shape[-1], 0, 0], value=0.)
+            m_x2 = F.pad(x2, [0, d - x2.shape[-1], 0, 0], value=0.)
+            merged_x = torch.cat([m_x2, m_x1], dim=1).permute(1, 0, 2)
+            merged_x_p = torch.zeros_like(merged_x).to(merged_x.device)
+
+            attn_wts = torch.cat([cols.view(-1, num_segs[0]), rows.view(-1, num_segs[1])], dim=1)
+            self.attn_hook(0, merged_x, merged_x_p, attn_wts, num_segs)
+
         return _x1, _x2
 
 

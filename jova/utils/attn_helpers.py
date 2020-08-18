@@ -17,7 +17,7 @@ from torch.nn.functional import pad
 
 
 class UnimodalAttentionData(object):
-    def __init__(self, view_lbl, view_x, prot_seqs, prot_profile, prot_vocab, layer_num, x, x_prime, wts):
+    def __init__(self, view_lbl, view_x, prot_seqs, prot_profile, prot_vocab, layer_num, x, x_prime, wts, is_jova):
         self.view_lbl = view_lbl
         self._unk = '<UNK>'
         self.prot_profile = prot_profile
@@ -29,12 +29,17 @@ class UnimodalAttentionData(object):
         self.raw_x = view_x
         self.x = x  # input attention, (num_segs, batch_size, dimension)
         self.x_prime = x_prime  # output of attention (num_segs, batch_size, dimension)
-        self.weights = wts  # (batch_size, num_segs, num_segs)
+        self.weights = wts  # (batch_size, num_segs, num_segs) if JoVA or (batch_size, num_segs, 1)
+        self.is_jova = is_jova
 
     def _get_x_prime_top_k(self, k):
-        x_prime_norm = torch.norm(self.x_prime, dim=2)
-        ranked = torch.sort(x_prime_norm, dim=0, descending=True)[1]
-        return ranked[0:k]
+        if self.is_jova:
+            x_prime_norm = torch.norm(self.x_prime, dim=2)
+            ranked = torch.sort(x_prime_norm, dim=0, descending=True)[1]
+            return ranked[0:k]
+        else:
+            ranked = torch.topk(self.weights, k, dim=1)[1]
+            return ranked[0:k].t()
 
     def _compound_segments_ranking(self, k):
         indices = self._get_x_prime_top_k(k).t().numpy()
@@ -92,19 +97,20 @@ class UnimodalAttentionData(object):
         if self.x.dim() == 3:
             if self.view_lbl in ['gconv', 'gnn', 'weave']:
                 return self._compound_segments_ranking(k)
-            elif self.view_lbl in ['p2v', 'rnn', 'pcnn']:
+            elif self.view_lbl in ['p2v', 'rnn', 'pcnn', 'pcnna']:
                 return self._protein_segments_ranking(k)
         return None
 
 
-class MultimodalAttentionData(object):
-    def __init__(self):
+class AttentionDataService(object):
+    def __init__(self, is_jova):
         self.labels = []
         self._data_xs = {}
         self._registry = []
         self._protein_profile = None
         self._protein_vocab = None
         self._prot_sequences = None
+        self.is_jova = is_jova
 
     @property
     def protein_profile(self):
@@ -137,7 +143,7 @@ class MultimodalAttentionData(object):
         assert isinstance(data_xs, dict)
         self._data_xs = data_xs
 
-    def joint_attn_forward_hook(self, layer_num, x, x_prime, wts, num_segs):
+    def attn_forward_hook(self, layer_num, x, x_prime, wts, num_segs):
         self._registry.clear()
         x = x.cpu().detach()
         x_prime = x_prime.cpu().detach()
@@ -152,7 +158,7 @@ class MultimodalAttentionData(object):
         for lbl, un_x, un_x_prime, un_wts in zip(self.labels, xs, x_primes, wts_lst):
             unimodal_attn_data = UnimodalAttentionData(lbl, self._data_xs[lbl], self.protein_sequences,
                                                        self.protein_profile, self.protein_vocabulary,
-                                                       layer_num, un_x, un_x_prime, un_wts)
+                                                       layer_num, un_x, un_x_prime, un_wts, self.is_jova)
             self._registry.append(unimodal_attn_data)
 
         # clear data buffer

@@ -132,10 +132,9 @@ if __name__ == '__main__':
             data = json.load(f)
 
         root_name = file.split(".j")[0]
-        metadata = json.loads(root_name)
+        metadata = json.loads(data['metadata'])
         seeds = [eval(s) for s in metadata['seeds'].split('-')]
-        cv = eval(metadata['cv'])
-        if cv:
+        if 'cv' in metadata and metadata['cv']:
             data_dict = retrieve_resource_cv(k=5, seeds=seeds, r_name=root_name, r_data=data,
                                              res_names=[
                                                  ("attn_ranking", 0),

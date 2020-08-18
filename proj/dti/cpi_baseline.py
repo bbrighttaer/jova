@@ -37,9 +37,10 @@ from jova.nn.models import create_fcn_layers, WeaveModel, GraphConvSequential, P
 from jova.trans import undo_transforms
 from jova.utils import Trainer
 from jova.utils.args import FcnArgs, WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.attn_helpers import AttentionDataService
 from jova.utils.io import save_model, load_model, load_pickle
 from jova.utils.math import ExpAverage
-from jova.utils.train_helpers import count_parameters, FrozenModels
+from jova.utils.train_helpers import count_parameters, FrozenModels, np_to_plot_data
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -47,6 +48,8 @@ date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 seeds = [1, 8, 64]
 
 torch.cuda.set_device(0)
+
+cpi_attn = AttentionDataService(False)
 
 
 def create_ecfp_net(hparams):
@@ -141,9 +144,11 @@ class CPIBaseline(Trainer):
                              "weave": create_weave_net,
                              "gconv": create_gconv_net,
                              "gnn": create_gnn_net}.get(view_lbl)
+
         comp_model = create_comp_model(hparams)
         # pt_embeddings = create_torch_embeddings(frozen_models_hook=frozen_models,
         #                                         np_embeddings=protein_embeddings)
+        func_callback = cpi_attn.attn_forward_hook if hparams["explain_mode"] else None
         comp_net_pcnn = ProtCnnForward(prot2vec=Prot2Vec(protein_profile=protein_profile,
                                                          vocab_size=hparams["prot"]["vocab_size"],
                                                          embedding_dim=hparams["prot"]["dim"],
@@ -151,8 +156,10 @@ class CPIBaseline(Trainer):
                                        prot_cnn_model=ProteinCNNAttention(dim=hparams["prot"]["dim"],
                                                                           window=hparams["prot"]["window"],
                                                                           num_layers=hparams["prot"][
-                                                                              "prot_cnn_num_layers"]),
+                                                                              "prot_cnn_num_layers"],
+                                                                          attn_hook=func_callback),
                                        comp_model=comp_model)
+        cpi_attn.labels.append('pcnna')
 
         p = 2 * hparams["prot"]["dim"]
         layers = [comp_net_pcnn]
@@ -178,13 +185,13 @@ class CPIBaseline(Trainer):
                                        shuffle=True,
                                        collate_fn=lambda x: x)
         val_data_loader = DataLoader(dataset=val_dataset,
-                                     batch_size=hparams["val_batch_size"],
+                                     batch_size=1 if hparams["explain_mode"] else hparams["val_batch_size"],
                                      shuffle=False,
                                      collate_fn=lambda x: x)
         test_data_loader = None
         if test_dataset is not None:
             test_data_loader = DataLoader(dataset=test_dataset,
-                                          batch_size=hparams["test_batch_size"],
+                                          batch_size=1 if hparams["explain_mode"] else hparams["test_batch_size"],
                                           shuffle=False,
                                           collate_fn=lambda x: x)
 
@@ -285,7 +292,7 @@ class CPIBaseline(Trainer):
             sim_data_node.data = [train_loss_node, metrics_node, scores_node]
         try:
             # Main training loop
-            for epoch in range(n_epochs):
+            for epoch in range(0):
                 if terminate_training:
                     print("Terminating training...")
                     break
@@ -452,7 +459,8 @@ class CPIBaseline(Trainer):
                         predicted_vals.extend(undo_transforms(y_predicted.cpu().detach().numpy(),
                                                               transformers_dict[view_lbl]).squeeze().tolist())
                         true_vals.extend(undo_transforms(y_true,
-                                                         transformers_dict[view_lbl]).astype(np.float).squeeze().tolist())
+                                                         transformers_dict[view_lbl]).astype(
+                            np.float).squeeze().tolist())
 
                     eval_dict = {}
                     score = CPIBaseline.evaluate(eval_dict, y_true, y_predicted, w, metrics, tasks,
@@ -477,6 +485,69 @@ class CPIBaseline(Trainer):
         duration = time.time() - start
         print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
 
+    @staticmethod
+    def explain_model(model, model_dir, model_name, data_loaders, transformers_dict, prot_desc_dict, view_lbl,
+                      sim_data_node=None, max_print=10, k=10):
+        # load saved model and put in evaluation mode
+        model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc='cuda' if torch.cuda.is_available()
+        else 'cpu'))
+        model.eval()
+
+        print("Model evaluation...")
+        start = time.time()
+
+        # sub-nodes of sim data resource
+        attn_ranking = []
+        attn_ranking_node = DataNode(label="attn_ranking", data=attn_ranking)
+
+        # add sim data nodes to parent node
+        if sim_data_node:
+            sim_data_node.data = [attn_ranking_node]
+
+        # Iterate through mini-batches
+        i = 0
+        phase = 'test' if data_loaders['test'] is not None else 'val'
+        for batch in tqdm(data_loaders[phase]):
+            if i == max_print:
+                print('\nMaximum number [%d] of samples limit reached. Terminating...' % i)
+                break
+            i += 1
+            batch_size, data = batch_collator(batch, prot_desc_dict, spec=view_lbl,
+                                              cuda_prot=False)
+
+            # Data
+            protein_x = data[view_lbl][0][2]
+            if view_lbl == "gconv":
+                # graph data structure is: [(compound data, batch_size), protein_data]
+                X = ((data[view_lbl][0][0], batch_size), protein_x)
+            else:
+                X = (data[view_lbl][0][0], protein_x)
+            y_true = np.array([k for k in data[view_lbl][1]], dtype=np.float)
+            w = np.array([k for k in data[view_lbl][2]], dtype=np.float)
+
+            # attention x data for analysis
+            attn_data_x = {}
+            attn_data_x['pcnna'] = protein_x
+
+            # forward propagation
+            with torch.set_grad_enabled(False):
+                # register attention data for reverse-mapping
+                cpi_attn.register_data(attn_data_x)
+
+                y_predicted = model(X)
+
+            # get segments ranking
+            transformer = transformers_dict[view_lbl]
+            rank_results = {'y_pred': np_to_plot_data(undo_transforms(y_predicted.cpu().detach().numpy(),
+                                                                      transformer)),
+                            'y_true': np_to_plot_data(undo_transforms(y_true, transformer)),
+                            'attn_ranking': cpi_attn.get_rankings(k)}
+            attn_ranking.append(rank_results)
+        # End of mini=batch iterations.
+
+        duration = time.time() - start
+        print('\nPrediction interpretation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
+
 
 def main(pid, flags):
     if len(flags.views) > 0:
@@ -491,15 +562,23 @@ def main(pid, flags):
         # Simulation data resource tree
         split_label = flags.split
         dataset_lbl = flags["dataset_name"]
+        if flags['eval']:
+            mode = 'eval'
+        elif flags['explain']:
+            mode = 'explain'
+        else:
+            mode = 'train'
         node_label = json.dumps({'model_family': 'cpi',
                                  'dataset': dataset_lbl,
                                  'cview': 'gnn',
                                  'pview': 'pcnna',
                                  'split': split_label,
+                                 'cv': flags["cv"],
                                  'seeds': '-'.join([str(s) for s in seeds]),
-                                 'mode': "eval" if flags["eval"] else "train",
+                                 'mode': mode,
                                  'date': date_label})
-        sim_data = DataNode(label=''.join([sim_label, dataset_lbl, split_label, date_label]), metadata=node_label)
+        sim_data = DataNode(label='_'.join([sim_label, dataset_lbl, split_label, mode,
+                                            date_label]), metadata=node_label)
         nodes_list = []
         sim_data.data = nodes_list
 
@@ -510,6 +589,11 @@ def main(pid, flags):
         prot_desc_dict, prot_seq_dict = load_proteins(flags['prot_desc_path'])
         prot_profile, prot_vocab = load_pickle(file_name=flags.prot_profile), load_pickle(file_name=flags.prot_vocab)
         flags["prot_vocab_size"] = len(prot_vocab)
+
+        # set attention hook's protein information
+        cpi_attn.protein_profile = prot_profile
+        cpi_attn.protein_vocabulary = prot_vocab
+        cpi_attn.protein_sequences = prot_seq_dict
 
         # For searching over multiple seeds
         hparam_search = None
@@ -573,7 +657,7 @@ def main(pid, flags):
                 if hparam_search is None:
                     search_alg = {"random_search": RandomSearch,
                                   "bayopt_search": BayesianOptSearch}.get(flags["hparam_search_alg"],
-                                                                            BayesianOptSearch)
+                                                                          BayesianOptSearch)
                     search_args = GPMinArgs(n_calls=20)
                     min_opt = "gbrt"
                     hparam_search = search_alg(hparam_config=hparams_conf,
@@ -635,6 +719,9 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         trainer.evaluate_model(model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, transformers_dict,
                                prot_desc_dict, tasks, view_lbl=view, sim_data_node=sim_data_node)
+    elif flags["explain"]:
+        trainer.explain_model(model, flags["model_dir"], flags["eval_model_name"], data_loaders, transformers_dict,
+                              prot_desc_dict, view, sim_data_node)
     else:
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, frozen_models,
@@ -684,6 +771,7 @@ def default_hparams_rand(flags, view):
 
 def default_hparams_bopt(flags, view):
     return {
+        "explain_mode": flags.explain,
         "view": view,
         "hdims": [2092],
         "output_dim": len(flags.tasks),
@@ -731,6 +819,7 @@ def default_hparams_bopt(flags, view):
 
 def get_hparam_config(flags, view):
     return {
+        "explain_mode": ConstantParam(flags.explain),
         "view": ConstantParam(view),
         "hdims": DiscreteParam(min=256, max=5000, size=DiscreteParam(min=1, max=4)),
         "output_dim": ConstantParam(len(flags.tasks)),
@@ -863,15 +952,18 @@ if __name__ == '__main__':
     parser.add_argument("--eval",
                         action="store_true",
                         help="If true, a saved model is loaded and evaluated using CV")
+    parser.add_argument("--explain",
+                        action="store_true",
+                        help="If true, a saved model is loaded and used in ranking segments to explain predictions")
     parser.add_argument("--eval_model_name",
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
-    parser.add_argument("--fingerprint",
-                        default=None,
-                        type=str,
-                        help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
-                             "neighbors")
+    # parser.add_argument("--fingerprint",
+    #                     default=None,
+    #                     type=str,
+    #                     help="The pickled python dictionary containing the GNN fingerprint profiles of atoms and their"
+    #                          "neighbors")
     parser.add_argument('--mp', '-mp', action='store_true', help="Multiprocessing option")
 
     args = parser.parse_args()

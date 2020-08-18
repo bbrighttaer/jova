@@ -38,9 +38,10 @@ from jova.nn.models import GraphConvSequential, WeaveModel, ProteinRNN, TwoWayFo
 from jova.trans import undo_transforms
 from jova.utils import Trainer
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs
+from jova.utils.attn_helpers import AttentionDataService
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage
-from jova.utils.train_helpers import count_parameters, FrozenModels
+from jova.utils.train_helpers import count_parameters, FrozenModels, np_to_plot_data
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -54,6 +55,8 @@ use_weave = False
 use_gconv = True
 use_gnn = False
 use_prot = True
+
+two_way_attn = AttentionDataService(False)
 
 
 def create_weave_net(hparams):
@@ -132,9 +135,12 @@ def create_integrated_net(hparams, protein_profile):
     if use_weave:
         views["weave"] = create_weave_net(hparams)
         comp_dim = hparams["weave"]["dim"]
+        two_way_attn.labels.append('weave')
     if use_gconv:
         views["gconv"] = create_gconv_net(hparams)
         comp_dim = hparams["gconv"]["dim"]
+        two_way_attn.labels.append('gconv')
+    two_way_attn.labels.append('rnn')
 
     siamese_layers = []
     # siamese net
@@ -148,8 +154,9 @@ def create_integrated_net(hparams, protein_profile):
 
     # Build model. Note: the order of protein and compound models should be consistent.
     prot_dim = hparams["prot"]["rnn_hidden_state_dim"]
+    func_callback = two_way_attn.attn_forward_hook if hparams["explain_mode"] else None
     model = nn.Sequential(TwoWayForward(*views.values()),
-                          TwoWayAttention(prot_dim, comp_dim),
+                          TwoWayAttention(prot_dim, comp_dim, attn_hook=func_callback),
                           PreSiameseLinear(prot_dim, comp_dim, hparams["latent_dim"]),
                           *siamese_layers,
                           PairwiseDotProduct())
@@ -176,13 +183,13 @@ class TwoWayAttnBaseline(Trainer):
                                        shuffle=True,
                                        collate_fn=lambda x: x)
         val_data_loader = DataLoader(dataset=val_dataset,
-                                     batch_size=hparams["val_batch_size"],
+                                     batch_size=1 if hparams["explain_mode"] else hparams["val_batch_size"],
                                      shuffle=False,
                                      collate_fn=lambda x: x)
         test_data_loader = None
         if test_dataset is not None:
             test_data_loader = DataLoader(dataset=test_dataset,
-                                          batch_size=hparams["test_batch_size"],
+                                          batch_size=1 if hparams["explain_mode"] else hparams["test_batch_size"],
                                           shuffle=False,
                                           collate_fn=lambda x: x)
 
@@ -438,6 +445,10 @@ class TwoWayAttnBaseline(Trainer):
         n_epochs = 1
 
         # sub-nodes of sim data resource
+        attn_ranking = []
+        attn_ranking_node = DataNode(label="attn_ranking", data=attn_ranking)
+
+        # sub-nodes of sim data resource
         # loss_lst = []
         # train_loss_node = DataNode(label="training_loss", data=loss_lst)
         metrics_dict = {}
@@ -528,6 +539,95 @@ class TwoWayAttnBaseline(Trainer):
         duration = time.time() - start
         print('\nModel evaluation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
 
+    @staticmethod
+    def explain_model(model, model_dir, model_name, data_loaders, prot_model_type, transformers_dict,
+                       prot_desc_dict, sim_data_node, max_print=10, k=10):
+        # load saved model and put in evaluation mode
+        model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc='cuda' if torch.cuda.is_available()
+                                                       else 'cpu'))
+        model.eval()
+
+        print("Model evaluation...")
+        start = time.time()
+
+        # sub-nodes of sim data resource
+        attn_ranking = []
+        attn_ranking_node = DataNode(label="attn_ranking", data=attn_ranking)
+
+        # add sim data nodes to parent node
+        if sim_data_node:
+            sim_data_node.data = [attn_ranking_node]
+
+        # Main evaluation loop
+        i = 0
+        phase = 'test' if data_loaders['test'] is not None else 'val'
+        for batch in tqdm(data_loaders[phase]):
+            if i == max_print:
+                print('\nMaximum number [%d] of samples limit reached. Terminating...' % i)
+                break
+            i += 1
+            batch_size, data = batch_collator(batch, prot_desc_dict, spec={"weave": use_weave,
+                                                                           "gconv": use_gconv,
+                                                                           "gnn": use_gnn})
+            # attention x data for analysis
+            attn_data_x = {}
+
+            # organize the data for each view.
+            Xs = {}
+            Ys = {}
+            Ws = {}
+            for view_name in data:
+                view_data = data[view_name]
+                if view_name == "gconv":
+                    x = ((view_data[0][0], batch_size), view_data[0][1], view_data[0][2])
+                    Xs["gconv"] = x
+                else:
+                    Xs[view_name] = view_data[0]
+                Ys[view_name] = view_data[1]
+                Ws[view_name] = view_data[2].reshape(-1, 1).astype(np.float)
+                attn_data_x[view_name] = view_data[0][3]
+
+            # forward propagation
+            with torch.set_grad_enabled(False):
+                Ys = {k: Ys[k].astype(np.float) for k in Ys}
+                # Ensure corresponding pairs
+                for i in range(1, len(Ys.values())):
+                    assert (list(Ys.values())[i - 1] == list(Ys.values())[i]).all()
+
+                y_true = Ys[list(Xs.keys())[0]]
+                w = Ws[list(Xs.keys())[0]]
+                if prot_model_type == "p2v" or prot_model_type == "rnn":
+                    protein_x = Xs[list(Xs.keys())[0]][2]
+                else:
+                    protein_x = Xs[list(Xs.keys())[0]][1]
+                attn_data_x[prot_model_type] = Xs[list(Xs.keys())[0]][2]
+
+                X = []
+                if use_prot:
+                    X.append(protein_x)
+                if use_weave:
+                    X.append(Xs["weave"][0])
+                if use_gconv:
+                    X.append(Xs["gconv"][0])
+
+                # register attention data for reverse-mapping
+                two_way_attn.register_data(attn_data_x)
+
+                # forward propagation
+                y_predicted = model(X)
+
+                # get segments ranking
+                transformer = transformers_dict[list(Xs.keys())[0]]
+                rank_results = {'y_pred': np_to_plot_data(undo_transforms(y_predicted.cpu().detach().numpy(),
+                                                                          transformer)),
+                                'y_true': np_to_plot_data(undo_transforms(y_true, transformer)),
+                                'attn_ranking': two_way_attn.get_rankings(k)}
+                attn_ranking.append(rank_results)
+        # End of mini=batch iterations.
+
+        duration = time.time() - start
+        print('\nPrediction interpretation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
+
 
 def main(pid, flags):
     sim_label = "two_way_attn_dti_baseline"
@@ -538,13 +638,22 @@ def main(pid, flags):
     dataset_lbl = flags["dataset_name"]
     # node_label = "{}_{}_{}_{}_{}".format(dataset_lbl, sim_label, split_label, "eval" if flags["eval"] else "train",
     #                                      date_label)
+
+    if flags['eval']:
+        mode = 'eval'
+    elif flags['explain']:
+        mode = 'explain'
+    else:
+        mode = 'train'
     node_label = json.dumps({'model_family': '2way-dti',
                              'dataset': dataset_lbl,
                              'split': split_label,
-                             'mode': "eval" if flags["eval"] else "train",
+                             'cv': flags["cv"],
+                             'mode': mode,
                              'seeds': '-'.join([str(s) for s in seeds]),
                              'date': date_label})
-    sim_data = DataNode(label=''.join([sim_label, dataset_lbl, split_label, date_label]), metadata=node_label)
+    sim_data = DataNode(label='_'.join([sim_label, dataset_lbl, split_label, mode,
+                                        date_label]), metadata=node_label)
     nodes_list = []
     sim_data.data = nodes_list
 
@@ -557,6 +666,11 @@ def main(pid, flags):
     # pretrained_embeddings = load_numpy_array(flags.protein_embeddings)
     flags["prot_vocab_size"] = len(prot_vocab)
     # flags["embeddings_dim"] = pretrained_embeddings.shape[-1]
+
+    # set attention hook's protein information
+    two_way_attn.protein_profile = prot_profile
+    two_way_attn.protein_vocabulary = prot_vocab
+    two_way_attn.protein_sequences = prot_seq_dict
 
     # For searching over multiple seeds
     hparam_search = None
@@ -688,6 +802,9 @@ def start_fold(sim_data_node, data_dict, flags, hyper_params, prot_desc_dict, ta
         trainer.evaluate_model(model, flags["model_dir"], flags["eval_model_name"],
                                data_loaders, metrics, prot_model_type, transformers_dict, prot_desc_dict,
                                tasks, sim_data_node=sim_data_node)
+    elif flags["explain"]:
+        trainer.explain_model(model, flags["model_dir"], flags["eval_model_name"], data_loaders, prot_model_type,
+                              transformers_dict, prot_desc_dict, sim_data_node)
     else:
         # Train the model
         results = trainer.train(model, optimizer, data_loaders, metrics, prot_model_type,
@@ -753,6 +870,7 @@ def default_hparams_rand(flags):
 
 def default_hparams_bopt(flags):
     return {
+        "explain_mode": flags.explain,
         "latent_dim": 512,
         "siamese_hdims": [1205, 660],
 
@@ -791,6 +909,7 @@ def default_hparams_bopt(flags):
 def get_hparam_config(flags):
     prot_model = "rnn"
     return {
+        "explain_mode": ConstantParam(flags.explain),
         "latent_dim": CategoricalParam(choices=[64, 128, 256, 512]),
         "siamese_hdims": DiscreteParam(min=64, max=2048, size=DiscreteParam(min=1, max=4)),
 
@@ -940,6 +1059,9 @@ if __name__ == '__main__':
     parser.add_argument("--eval",
                         action="store_true",
                         help="If true, a saved model is loaded and evaluated using CV")
+    parser.add_argument("--explain",
+                        action="store_true",
+                        help="If true, a saved model is loaded and used in ranking segments to explain predictions")
     parser.add_argument("--eval_model_name",
                         default=None,
                         type=str,

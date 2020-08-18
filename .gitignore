@@ -19,6 +19,8 @@
 *.pkl
 *.gzip
 
+tb_**/
+
 data/**/*.json
 
 # saved model parameters

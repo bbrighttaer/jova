@@ -41,11 +41,11 @@ from jova.nn.models import GraphConvSequential, WeaveModel, NwayForward, JointAt
 from jova.trans import undo_transforms
 from jova.utils import Trainer
 from jova.utils.args import WeaveLayerArgs, WeaveGatherArgs, Flags
-from jova.utils.attn_helpers import MultimodalAttentionData
+from jova.utils.attn_helpers import AttentionDataService
 from jova.utils.io import load_pickle
 from jova.utils.math import ExpAverage, Count
 from jova.utils.tb import TBMeanTracker
-from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels, ViewsReg, parse_hparams
+from jova.utils.train_helpers import count_parameters, GradStats, FrozenModels, ViewsReg, parse_hparams, np_to_plot_data
 
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
@@ -57,7 +57,7 @@ check_data = False
 dvc_id = 0
 torch.cuda.set_device(dvc_id)
 
-joint_attention_data = MultimodalAttentionData()
+joint_attention_data = AttentionDataService(True)
 
 views_reg = ViewsReg()
 
@@ -221,7 +221,7 @@ def create_integrated_net(hparams, protein_profile, protein_embeddings):
 
     layers = [NwayForward(models=views.values())]
 
-    func_callback = joint_attention_data.joint_attn_forward_hook if hparams["explain_mode"] else None
+    func_callback = joint_attention_data.attn_forward_hook if hparams["explain_mode"] else None
     layers.append(JointAttention(d_dims=seg_dims, latent_dim=hparams["latent_dim"], num_heads=hparams["attn_heads"],
                                  num_layers=hparams["attn_layers"], dprob=hparams["dprob"],
                                  attn_hook=func_callback))
@@ -729,15 +729,7 @@ class Jova(Trainer):
         # End of mini=batch iterations.
 
         duration = time.time() - start
-        print('\nModel explanation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
-
-
-def np_to_plot_data(y):
-    y = y.squeeze()
-    if y.shape == ():
-        return [float(y)]
-    else:
-        return y.squeeze().tolist()
+        print('\nPrediction interpretation duration: {:.0f}m {:.0f}s'.format(duration // 60, duration % 60))
 
 
 def main(pid, flags):
@@ -787,7 +779,8 @@ def main(pid, flags):
                                  'cv': str(flags['cv']),
                                  'seeds': '-'.join([str(s) for s in seeds]),
                                  'date': date_label})
-        sim_data = DataNode(label=node_label)
+        sim_data = DataNode(label=''.join([sim_label, dataset_lbl, split_label, mode,
+                                           date_label]), metadata=node_label)
         nodes_list = []
         sim_data.data = nodes_list
 
