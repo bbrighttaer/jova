@@ -182,17 +182,17 @@ class CPIBaseline(Trainer):
 
         # data loaders
         train_data_loader = DataLoader(dataset=train_dataset,
-                                       batch_size=1 if hparams["explain_mode"] else hparams["tr_batch_size"],
+                                       batch_size=10 if hparams["explain_mode"] else hparams["tr_batch_size"],
                                        shuffle=True,
                                        collate_fn=lambda x: x)
         val_data_loader = DataLoader(dataset=val_dataset,
-                                     batch_size=1 if hparams["explain_mode"] else hparams["val_batch_size"],
+                                     batch_size=10 if hparams["explain_mode"] else hparams["val_batch_size"],
                                      shuffle=False,
                                      collate_fn=lambda x: x)
         test_data_loader = None
         if test_dataset is not None:
             test_data_loader = DataLoader(dataset=test_dataset,
-                                          batch_size=1 if hparams["explain_mode"] else hparams["test_batch_size"],
+                                          batch_size=10 if hparams["explain_mode"] else hparams["test_batch_size"],
                                           shuffle=False,
                                           collate_fn=lambda x: x)
 
