@@ -119,12 +119,12 @@ def retrieve_resource(seeds, r_name, r_data, res_names):
 
 if __name__ == '__main__':
     folder = "analysis/egfr_cs"
-    qualifier = "egfr_1M17"
+    qualifier = "cpi"
     files = list(filter(lambda f: qualifier in f and '.json' in f, os.listdir(folder)))
     print('Number of files loaded=', len(files))
-    seq_offset = 0
+    seq_offset = 671
     files.sort()
-    results_folder = "results_" + folder + '_explain'
+    results_folder = "analysis/results_" + folder + '_explain'
     os.makedirs(results_folder, exist_ok=True)
     for file in tqdm(files):
         print(file)
@@ -156,6 +156,8 @@ if __name__ == '__main__':
                     rank_data = sample_dt['attn_ranking']
                     rank_data = list(filter(lambda dt: dt is not None, rank_data))
                     csv_row = {'dataset': None, 'y_true': y_true[0], 'y_pred': y_pred[0]}
+                    if 'smiles' in sample_dt:
+                        csv_row['compound'] = sample_dt['smiles']
                     for v, view_dict in enumerate(rank_data):
                         view_lbl = view_dict['view']
                         csv_row[f'view{v + 1}'] = view_lbl

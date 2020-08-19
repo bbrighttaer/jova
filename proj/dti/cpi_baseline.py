@@ -15,6 +15,7 @@ import json
 import random
 import time
 from datetime import datetime as dt
+from itertools import chain
 
 import numpy as np
 import torch
@@ -45,9 +46,9 @@ from jova.utils.train_helpers import count_parameters, FrozenModels, np_to_plot_
 currentDT = dt.now()
 date_label = currentDT.strftime("%Y_%m_%d__%H_%M_%S")
 
-seeds = [1, 8, 64]
+seeds = [1]  # , 8, 64]
 
-torch.cuda.set_device(0)
+# torch.cuda.set_device(0)
 
 cpi_attn = AttentionDataService(False)
 
@@ -181,7 +182,7 @@ class CPIBaseline(Trainer):
 
         # data loaders
         train_data_loader = DataLoader(dataset=train_dataset,
-                                       batch_size=hparams["tr_batch_size"],
+                                       batch_size=1 if hparams["explain_mode"] else hparams["tr_batch_size"],
                                        shuffle=True,
                                        collate_fn=lambda x: x)
         val_data_loader = DataLoader(dataset=val_dataset,
@@ -487,7 +488,7 @@ class CPIBaseline(Trainer):
 
     @staticmethod
     def explain_model(model, model_dir, model_name, data_loaders, transformers_dict, prot_desc_dict, view_lbl,
-                      sim_data_node=None, max_print=10, k=10):
+                      sim_data_node=None, max_print=10000, k=10):
         # load saved model and put in evaluation mode
         model.load_state_dict(jova.utils.io.load_model(model_dir, model_name, dvc='cuda' if torch.cuda.is_available()
         else 'cpu'))
@@ -506,8 +507,13 @@ class CPIBaseline(Trainer):
 
         # Iterate through mini-batches
         i = 0
-        phase = 'test' if data_loaders['test'] is not None else 'val'
-        for batch in tqdm(data_loaders[phase]):
+        # Since we're evaluating, join all data loaders
+        all_loaders = chain()
+        for loader in data_loaders:
+            if data_loaders[loader] is not None:
+                all_loaders = chain(all_loaders, data_loaders[loader])
+
+        for batch in tqdm(all_loaders):
             if i == max_print:
                 print('\nMaximum number [%d] of samples limit reached. Terminating...' % i)
                 break
@@ -541,6 +547,7 @@ class CPIBaseline(Trainer):
             rank_results = {'y_pred': np_to_plot_data(undo_transforms(y_predicted.cpu().detach().numpy(),
                                                                       transformer)),
                             'y_true': np_to_plot_data(undo_transforms(y_true, transformer)),
+                            'smiles': data[view_lbl][0][3][0][0].smiles,
                             'attn_ranking': cpi_attn.get_rankings(k)}
             attn_ranking.append(rank_results)
         # End of mini=batch iterations.
@@ -810,7 +817,8 @@ def default_hparams_bopt(flags, view):
             "ecfp_hdims": [653, 3635],
         },
         "gnn": {
-            "fingerprint_size": len(flags["gnn_fingerprint"]),
+            "fingerprint_size": len(flags["gnn_fingerprint"]) if flags['gnn_fingerprint_size'] is None else
+            flags['gnn_fingerprint_size'],
             "num_layers": 2,
             "dim": 500,
         }
@@ -959,6 +967,9 @@ if __name__ == '__main__':
                         default=None,
                         type=str,
                         help="The filename of the model to be loaded from the directory specified in --model_dir")
+    parser.add_argument('--gnn_fingerprint_size', default=None, type=int,
+                        help='The size of the fingerprint dictionary (if a gnn fingerprint size other than that of'
+                             ' the dataset is to be used)')
     # parser.add_argument("--fingerprint",
     #                     default=None,
     #                     type=str,

@@ -14,7 +14,7 @@ from abc import ABC
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_scatter import scatter_add, scatter_max
+# from torch_scatter import scatter_add, scatter_max
 
 from jova.utils.train_helpers import get_activation_func
 
